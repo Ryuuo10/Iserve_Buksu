@@ -1,0 +1,28 @@
+// Test localStorage functionality
+console.log('🧪 Testing localStorage functionality...');
+
+// Test setting and getting token
+const testToken = 'test-jwt-token-12345';
+localStorage.setItem('authToken', testToken);
+const retrievedToken = localStorage.getItem('authToken');
+console.log('Token test:', retrievedToken === testToken ? '✅ PASS' : '❌ FAIL');
+
+// Test setting and getting user
+const testUser = {
+  id: '123',
+  email: 'iservebuksu@gmail.com',
+  role: 'superadmin',
+  name: 'Super Admin'
+};
+localStorage.setItem('user', JSON.stringify(testUser));
+const retrievedUser = localStorage.getItem('user');
+const parsedUser = retrievedUser ? JSON.parse(retrievedUser) : null;
+console.log('User test:', parsedUser && parsedUser.role === 'superadmin' ? '✅ PASS' : '❌ FAIL');
+
+// Test clearing
+localStorage.removeItem('authToken');
+localStorage.removeItem('user');
+console.log('Clear test:', !localStorage.getItem('authToken') && !localStorage.getItem('user') ? '✅ PASS' : '❌ FAIL');
+
+console.log('\n📋 localStorage is working correctly!');
+console.log('🌐 The issue might be in the routing or component logic.');

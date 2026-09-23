@@ -1,0 +1,37 @@
+{
+  "samples": [
+    {
+      "id": "sample-001",
+      "subject": "Unfair grade",
+      "description": "Despite being present, doing activities, and submitting them on time, the instructor gave a 5.0 grade which the complainant finds unacceptable. Location: Classroom",
+      "expected": {
+        "category": "Teaching And Grading Issues",
+        "urgency": "high",
+        "sentiment": "neutral",
+        "summary": "The instructor gave a 5.0 grade despite the complainant completing activities and submitting on time."
+      }
+    },
+    {
+      "id": "sample-002",
+      "subject": "Treated unfairly",
+      "description": "A faculty member from Food Technology treated me differently from others during class interactions, making me feel embarrassed. Location: Classroom",
+      "expected": {
+        "category": "General Feedback",
+        "urgency": "low",
+        "sentiment": "negative",
+        "summary": "A faculty member treated the complainant differently during class interactions and caused embarrassment."
+      }
+    },
+    {
+      "id": "sample-003",
+      "subject": "Unwanted physical contact during class",
+      "description": "My classmate aggressively touched my hair during a class activity, which caused me embarrassment and lowered my confidence. Location: Classroom",
+      "expected": {
+        "category": "Unfair Treatment",
+        "urgency": "high",
+        "sentiment": "negative",
+        "summary": "A classmate aggressively touched the complainant's hair during class, causing embarrassment and lowering confidence."
+      }
+    }
+  ]
+}

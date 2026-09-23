@@ -1,0 +1,504 @@
+const express = require('express');
+const router = express.Router();
+const axios = require('axios');
+const User = require('../models/User');
+const { verifyGoogleToken } = require('../middleware/googleAuth');
+const { generateToken } = require('../utils/tokenUtils');
+
+// Middleware to verify reCAPTCHA token
+const verifyRecaptcha = async (req, res, next) => {
+  try {
+    const { recaptchaToken } = req.body;
+
+    if (!recaptchaToken) {
+      return res.status(400).json({
+        success: false,
+        message: 'reCAPTCHA token is required',
+      });
+    }
+
+    // Verify reCAPTCHA token with Google
+    const response = await axios.post(
+      'https://www.google.com/recaptcha/api/siteverify',
+      null,
+      {
+        params: {
+          secret: process.env.RECAPTCHA_SECRET_KEY,
+          response: recaptchaToken,
+        },
+      }
+    );
+
+    if (!response.data.success) {
+      return res.status(400).json({
+        success: false,
+        message: 'reCAPTCHA verification failed',
+      });
+    }
+
+    // reCAPTCHA verification passed
+    next();
+  } catch (error) {
+    console.error('reCAPTCHA verification error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error verifying reCAPTCHA',
+    });
+  }
+};
+
+// POST: Google Sign-In / Sign-Up
+router.post('/google-signin', async (req, res) => {
+  try {
+    const { token, selectedRole } = req.body;
+
+    if (!token || !selectedRole) {
+      return res.status(400).json({
+        success: false,
+        message: 'Token and role are required',
+      });
+    }
+
+    // Verify Google token
+    const payload = await verifyGoogleToken(token);
+
+    const { sub: googleId, email, name, picture } = payload;
+
+    // Check if user exists in database
+    let user = await User.findOne({ email });
+
+    if (user) {
+      // User exists - check if role matches
+      if (user.role !== selectedRole) {
+        return res.status(409).json({
+          success: false,
+          status: 'ROLE_MISMATCH',
+          message: `This email is already registered as a ${user.role.replace('_', ' ').toUpperCase()}`,
+          existingRole: user.role,
+          attemptedRole: selectedRole,
+        });
+      }
+
+      // Role matches - update last login
+      user.lastLogin = new Date();
+      await user.save();
+
+      // Generate JWT token
+      const jwtToken = generateToken(user._id);
+
+      return res.status(200).json({
+        success: true,
+        status: 'SUCCESS',
+        message: 'Login successful',
+        user: {
+          id: user._id,
+          email: user.email,
+          name: user.name,
+          role: user.role,
+          profilePicture: user.profilePicture,
+        },
+        token: jwtToken,
+      });
+    }
+
+    // User doesn't exist - create new user
+    const newUser = new User({
+      googleId,
+      email,
+      name,
+      profilePicture: picture,
+      role: selectedRole,
+      isVerified: true, // Google accounts are pre-verified
+      lastLogin: new Date(),
+    });
+
+    await newUser.save();
+
+    // Generate JWT token
+    const jwtToken = generateToken(newUser._id);
+
+    return res.status(201).json({
+      success: true,
+      status: 'SUCCESS_NEW_USER',
+      message: 'Account created and signed in successfully',
+      user: {
+        id: newUser._id,
+        email: newUser.email,
+        name: newUser.name,
+        role: newUser.role,
+        profilePicture: newUser.profilePicture,
+      },
+      token: jwtToken,
+    });
+  } catch (error) {
+    console.error('Google Sign-In Error:', error);
+    return res.status(500).json({
+      success: false,
+      status: 'ERROR',
+      message: error.message || 'Server error during authentication',
+    });
+  }
+});
+
+// POST: Secure Admin Setup (ONE-TIME USE WITH SECURITY CHECKS)
+// This endpoint includes multiple security layers for initial admin creation
+router.post('/setup-admin', async (req, res) => {
+  try {
+    const { email, name, password, setupKey } = req.body;
+    
+    // Security Layer 1: Environment-based setup key verification
+    const requiredSetupKey = process.env.ADMIN_SETUP_KEY || 'default-setup-key-change-in-production';
+    if (setupKey !== requiredSetupKey) {
+      return res.status(401).json({
+        success: false,
+        message: 'Unauthorized: Invalid setup key'
+      });
+    }
+    
+    // Security Layer 2: Validate required fields
+    if (!email || !name || !password) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email, name, and password are required'
+      });
+    }
+    
+    // Security Layer 3: Email format validation
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid email format'
+      });
+    }
+    
+    // Security Layer 4: Password strength validation
+    if (password.length < 8) {
+      return res.status(400).json({
+        success: false,
+        message: 'Password must be at least 8 characters long'
+      });
+    }
+    
+    // Security Layer 5: Check if any admin already exists
+    const existingAdmin = await User.findOne({ role: 'admin' });
+    if (existingAdmin) {
+      // Log security attempt
+      console.warn(`Security Alert: Attempted admin setup when admin already exists from IP: ${req.ip}`);
+      return res.status(409).json({
+        success: false,
+        message: 'Admin user already exists. Contact system administrator.'
+      });
+    }
+    
+    // Security Layer 6: Domain restriction (optional - uncomment if needed)
+    // const allowedDomains = ['bukSU.edu.ph', 'admin.bukSU.edu.ph'];
+    // const emailDomain = email.split('@')[1];
+    // if (!allowedDomains.includes(emailDomain)) {
+    //   return res.status(400).json({
+    //     success: false,
+    //     message: 'Email domain not authorized for admin access'
+    //   });
+    // }
+    
+    // Create secure admin user
+    const adminUser = new User({
+      googleId: `admin_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      email: email.toLowerCase(),
+      name,
+      profilePicture: null,
+      password: password, // Will be hashed in production
+      role: 'admin',
+      office: null,
+      isVerified: true,
+      lastLogin: null,
+      status: 'active'
+    });
+    
+    await adminUser.save();
+    
+    // Log successful admin creation
+    console.log(`Security Log: Admin user created successfully - ${email}`);
+    
+    return res.status(201).json({
+      success: true,
+      message: 'Admin user created successfully. Please secure your credentials.',
+      user: {
+        id: adminUser._id,
+        email: adminUser.email,
+        name: adminUser.name,
+        role: adminUser.role
+      }
+    });
+  } catch (error) {
+    console.error('Admin Setup Error:', error);
+    // Don't expose internal errors to client
+    return res.status(500).json({
+      success: false,
+      message: 'Error during admin setup. Please try again.'
+    });
+  }
+});
+
+// POST: Traditional Login with Email/Password
+router.post('/login', verifyRecaptcha, async (req, res) => {
+  try {
+    const { email, password, role } = req.body;
+
+    if (!email || !password || !role) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email, password, and role are required',
+      });
+    }
+
+    // Find user by email
+    const user = await User.findOne({ email: email.toLowerCase() });
+
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid credentials',
+      });
+    }
+
+    // Check if user has password (traditional login)
+    if (!user.password) {
+      return res.status(401).json({
+        success: false,
+        message: 'This account uses Google Sign-In. Please use Google to sign in.',
+      });
+    }
+
+    // Check if role matches
+    if (user.role !== role) {
+      return res.status(403).json({
+        success: false,
+        message: `This account is registered as ${user.role.replace('_', ' ')}. Please select the correct role.`,
+      });
+    }
+
+    // Validate password (temporary for testing - should use bcrypt in production)
+    if (user.password !== password) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid credentials',
+      });
+    }
+
+    // Update last login
+    user.lastLogin = new Date();
+    await user.save();
+
+    // Generate JWT token
+    const jwtToken = generateToken(user._id);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Login successful',
+      user: {
+        id: user._id,
+        email: user.email,
+        name: user.name,
+        role: user.role,
+        profilePicture: user.profilePicture,
+      },
+      token: jwtToken,
+    });
+  } catch (error) {
+    console.error('Login Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error during login',
+    });
+  }
+});
+
+// GET: Check if email exists and get role
+router.post('/check-email', async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email is required',
+      });
+    }
+
+    const user = await User.findOne({ email: email.toLowerCase() });
+
+    if (user) {
+      return res.status(200).json({
+        success: true,
+        exists: true,
+        role: user.role,
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      exists: false,
+    });
+  } catch (error) {
+    console.error('Check Email Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error',
+    });
+  }
+});
+
+// ADMIN: Get all offices
+router.get('/offices', async (req, res) => {
+  try {
+    // Return predefined list of offices
+    const offices = [
+      { id: 'student_affairs', name: 'Student Affairs Office' },
+      { id: 'academic_affairs', name: 'Academic Affairs Office' },
+      { id: 'finance_office', name: 'Finance Office' },
+      { id: 'hr_office', name: 'Human Resources Office' },
+      { id: 'facilities_management', name: 'Facilities Management Office' },
+      { id: 'library_services', name: 'Library Services' },
+      { id: 'it_services', name: 'IT Services' },
+      { id: 'admissions_office', name: 'Admissions Office' },
+      { id: 'registrar_office', name: "Registrar's Office" },
+      { id: 'campus_security', name: 'Campus Security' },
+      { id: 'health_services', name: 'Health Services' }
+    ];
+
+    return res.status(200).json({
+      success: true,
+      offices: offices
+    });
+  } catch (error) {
+    console.error('Get Offices Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error retrieving offices',
+    });
+  }
+});
+
+// ADMIN: Add new office (placeholder for future dynamic office management)
+router.post('/offices', async (req, res) => {
+  try {
+    // This would be implemented for dynamic office management
+    // For now, we're using predefined offices
+    return res.status(200).json({
+      success: true,
+      message: 'Office management functionality coming soon'
+    });
+  } catch (error) {
+    console.error('Add Office Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error adding office',
+    });
+  }
+});
+
+
+ 
+ / /   P O S T :   T r a d i t i o n a l   S i g n u p   w i t h   E m a i l / P a s s w o r d 
+ r o u t e r . p o s t ( ' / s i g n u p ' ,   v e r i f y R e c a p t c h a ,   a s y n c   ( r e q ,   r e s )   = >   { 
+     t r y   { 
+         c o n s t   {   f u l l N a m e ,   e m a i l ,   p a s s w o r d ,   r o l e ,   o f f i c e   }   =   r e q . b o d y ; 
+ 
+         i f   ( ! f u l l N a m e   | |   ! e m a i l   | |   ! p a s s w o r d   | |   ! r o l e )   { 
+             r e t u r n   r e s . s t a t u s ( 4 0 0 ) . j s o n ( { 
+                 s u c c e s s :   f a l s e , 
+                 m e s s a g e :   ' F u l l   n a m e ,   e m a i l ,   p a s s w o r d ,   a n d   r o l e   a r e   r e q u i r e d ' , 
+             } ) ; 
+         } 
+ 
+         / /   C h e c k   i f   u s e r   a l r e a d y   e x i s t s 
+         c o n s t   e x i s t i n g U s e r   =   a w a i t   U s e r . f i n d O n e ( {   e m a i l :   e m a i l . t o L o w e r C a s e ( )   } ) ; 
+         i f   ( e x i s t i n g U s e r )   { 
+             r e t u r n   r e s . s t a t u s ( 4 0 9 ) . j s o n ( { 
+                 s u c c e s s :   f a l s e , 
+                 m e s s a g e :   ' A n   a c c o u n t   w i t h   t h i s   e m a i l   a l r e a d y   e x i s t s ' , 
+             } ) ; 
+         } 
+ 
+         / /   V a l i d a t e   r o l e 
+         c o n s t   v a l i d R o l e s   =   [ ' a d m i n ' ,   ' c o m p l a i n a n t ' ,   ' o f f i c e _ h a n d l e r ' ] ; 
+         i f   ( ! v a l i d R o l e s . i n c l u d e s ( r o l e ) )   { 
+             r e t u r n   r e s . s t a t u s ( 4 0 0 ) . j s o n ( { 
+                 s u c c e s s :   f a l s e , 
+                 m e s s a g e :   ' I n v a l i d   r o l e   s e l e c t e d ' , 
+             } ) ; 
+         } 
+ 
+         / /   F o r   o f f i c e   h a n d l e r s ,   o f f i c e   i s   r e q u i r e d 
+         i f   ( r o l e   = = =   ' o f f i c e _ h a n d l e r '   & &   ! o f f i c e )   { 
+             r e t u r n   r e s . s t a t u s ( 4 0 0 ) . j s o n ( { 
+                 s u c c e s s :   f a l s e , 
+                 m e s s a g e :   ' O f f i c e / D e p a r t m e n t   i s   r e q u i r e d   f o r   o f f i c e   h a n d l e r s ' , 
+             } ) ; 
+         } 
+ 
+         / /   V a l i d a t e   o f f i c e   i f   p r o v i d e d 
+         i f   ( o f f i c e )   { 
+             c o n s t   v a l i d O f f i c e s   =   [ 
+                 ' s t u d e n t _ a f f a i r s ' , 
+                 ' a c a d e m i c _ a f f a i r s ' , 
+                 ' f i n a n c e _ o f f i c e ' , 
+                 ' h r _ o f f i c e ' , 
+                 ' f a c i l i t i e s _ m a n a g e m e n t ' , 
+                 ' l i b r a r y _ s e r v i c e s ' , 
+                 ' i t _ s e r v i c e s ' , 
+                 ' a d m i s s i o n s _ o f f i c e ' , 
+                 ' r e g i s t r a r _ o f f i c e ' , 
+                 ' c a m p u s _ s e c u r i t y ' , 
+                 ' h e a l t h _ s e r v i c e s ' 
+             ] ; 
+ 
+             i f   ( ! v a l i d O f f i c e s . i n c l u d e s ( o f f i c e ) )   { 
+                 r e t u r n   r e s . s t a t u s ( 4 0 0 ) . j s o n ( { 
+                     s u c c e s s :   f a l s e , 
+                     m e s s a g e :   ' I n v a l i d   o f f i c e   s e l e c t i o n ' , 
+                 } ) ; 
+             } 
+         } 
+ 
+         / /   C r e a t e   n e w   u s e r 
+         c o n s t   n e w U s e r   =   n e w   U s e r ( { 
+             g o o g l e I d :   n u l l ,   / /   T r a d i t i o n a l   s i g n u p   u s e r s   d o n ' t   h a v e   G o o g l e   I D 
+             e m a i l :   e m a i l . t o L o w e r C a s e ( ) , 
+             n a m e :   f u l l N a m e , 
+             p a s s w o r d :   p a s s w o r d ,   / /   I n   p r o d u c t i o n ,   h a s h   t h i s   w i t h   b c r y p t 
+             r o l e :   r o l e , 
+             o f f i c e :   o f f i c e   | |   n u l l , 
+             i s V e r i f i e d :   f a l s e ,   / /   E m a i l   v e r i f i c a t i o n   w o u l d   b e   i m p l e m e n t e d 
+             l a s t L o g i n :   n e w   D a t e ( ) , 
+             p r o f i l e P i c t u r e :   n u l l 
+         } ) ; 
+ 
+         a w a i t   n e w U s e r . s a v e ( ) ; 
+ 
+         / /   G e n e r a t e   J W T   t o k e n 
+         c o n s t   j w t T o k e n   =   g e n e r a t e T o k e n ( n e w U s e r . _ i d ) ; 
+ 
+         r e t u r n   r e s . s t a t u s ( 2 0 1 ) . j s o n ( { 
+             s u c c e s s :   t r u e , 
+             m e s s a g e :   ' A c c o u n t   c r e a t e d   s u c c e s s f u l l y ' , 
+             u s e r :   { 
+                 i d :   n e w U s e r . _ i d , 
+                 e m a i l :   n e w U s e r . e m a i l , 
+                 n a m e :   n e w U s e r . n a m e , 
+                 r o l e :   n e w U s e r . r o l e , 
+                 o f f i c e :   n e w U s e r . o f f i c e , 
+             } , 
+             t o k e n :   j w t T o k e n , 
+         } ) ; 
+     }   c a t c h   ( e r r o r )   { 
+         c o n s o l e . e r r o r ( ' S i g n u p   E r r o r : ' ,   e r r o r ) ; 
+         r e t u r n   r e s . s t a t u s ( 5 0 0 ) . j s o n ( { 
+             s u c c e s s :   f a l s e , 
+             m e s s a g e :   ' S e r v e r   e r r o r   d u r i n g   s i g n u p ' , 
+         } ) ; 
+     } 
+ } ) ; 
+ 
+ 
