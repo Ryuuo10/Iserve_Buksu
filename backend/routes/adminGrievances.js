@@ -8,6 +8,7 @@ const Notification = require('../models/Notification');
 const { authenticateToken, checkRole, requirePermission } = require('../middleware/auth');
 const {
   notifyAdminsGrievanceSubmitted,
+  notifyAdminsCriticalGrievanceDetected,
   notifyComplainantGrievanceArchived,
   notifyComplainantGrievanceAssigned,
   notifyComplainantGrievanceStatusUpdated,
@@ -15,6 +16,8 @@ const {
   notifyOfficeHandlerAssignment,
   notifyOfficeHandlersGrievanceRouted,
 } = require('../services/notificationService');
+const { isCriticalGrievance } = require('../utils/criticalAlerts');
+const { analyzeGrievance } = require('../services/grievanceAiAnalysis');
 const {
   updateWithOptimisticLock,
   executeTransaction,
@@ -773,6 +776,34 @@ router.get('/grievances/queue', ...adminGuard, requirePermission('grievances.vie
   }
 });
 
+router.put('/grievances/:id/ai-analysis', ...adminGuard, requirePermission('grievances.edit'), async (req, res) => {
+  if (req.user.role !== 'superadmin') {
+    return res.status(403).json({ success: false, message: 'Only superadmins can rerun AI analysis' });
+  }
+  try {
+    const existing = await Grievance.findById(req.params.id);
+    if (!existing) return res.status(404).json({ success: false, message: 'Grievance not found' });
+    if (req.body.version !== undefined && req.body.version !== existing.__v) {
+      return res.status(409).json({ success: false, message: 'The case changed. Refresh before reanalyzing.' });
+    }
+    const text = [existing.subject, existing.originalDescription || existing.description].filter(Boolean).join('\n');
+    const aiAnalysis = await analyzeGrievance(text);
+    const grievance = await Grievance.findOneAndUpdate({ _id: existing._id, __v: existing.__v }, {
+      $set: { aiAnalysis, aiAnalysisStatus: 'completed', aiAnalysisError: '', category: aiAnalysis.category.label, priority: aiAnalysis.urgency.label },
+      $inc: { __v: 1 },
+    }, { new: true, runValidators: true });
+    if (!grievance) return res.status(409).json({ success: false, message: 'The case changed during analysis. Refresh and try again.' });
+    if (isCriticalGrievance(grievance)) {
+      await notifyAdminsCriticalGrievanceDetected({ grievance, actor: req.user, aiAnalysis, reAlert: !isCriticalGrievance(existing) })
+        .catch((error) => console.error('Critical reanalysis alert failed:', error.message));
+    }
+    return res.json({ success: true, data: sanitizeAnonymousGrievanceForResponse(grievance), message: 'Trained model analysis updated' });
+  } catch (error) {
+    console.error('Reanalysis failed:', error.message);
+    return res.status(503).json({ success: false, message: 'Trained AI analysis is unavailable. Check the model worker and try again.' });
+  }
+});
+
 router.put('/grievances/:id', ...adminGuard, requirePermission('grievances.edit'), async (req, res) => {
   try {
     const { status, office, version, aiAnalysisOverride, aiAnalysisOverrideEnabled } = req.body;
@@ -781,7 +812,7 @@ router.put('/grievances/:id', ...adminGuard, requirePermission('grievances.edit'
 
     // Load existing grievance
     const existing = await Grievance.findById(grievanceId).select(
-      'complainantId referenceNumber status priority office department assignedTo assignedBy assignedAt underReviewAt departmentAssignedAt officeReceivedAt __v'
+      'complainantId referenceNumber status priority aiAnalysis aiAnalysisOverride office department assignedTo assignedBy assignedAt underReviewAt departmentAssignedAt officeReceivedAt __v'
     );
     if (!existing) {
       return res.status(404).json({ success: false, message: 'Grievance not found' });
@@ -991,6 +1022,11 @@ router.put('/grievances/:id', ...adminGuard, requirePermission('grievances.edit'
       if (!grievance) {
         return res.status(404).json({ success: false, message: 'Grievance not found' });
       }
+    }
+
+    if (isCriticalGrievance(grievance) && !isCriticalGrievance(existingGrievance)) {
+      await notifyAdminsCriticalGrievanceDetected({ grievance, actor: req.user, reAlert: true })
+        .catch((error) => console.error('Critical override alert failed:', error.message));
     }
 
     // Send notification if status changed
@@ -1224,6 +1260,11 @@ router.post('/grievances', ...adminGuard, requirePermission('grievances.edit'), 
       grievance,
       actor: req.user,
     });
+
+    if (isCriticalGrievance(grievance)) {
+      await notifyAdminsCriticalGrievanceDetected({ grievance, actor: req.user, aiAnalysis })
+        .catch((error) => console.error('Critical creation alert failed:', error.message));
+    }
 
     // Attempt auto-assignment to appropriate office handler
     console.log(`📮 Attempting auto-assignment for grievance ${grievance.referenceNumber} (office: ${grievance.office})`);

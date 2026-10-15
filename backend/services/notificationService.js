@@ -3,6 +3,7 @@ const User = require('../models/User');
 const { hasEmailConfig, sendEmail } = require('../utils/emailUtils');
 const { getSystemSettingsSnapshot } = require('../utils/systemSettings');
 const { emitNotificationCreated, emitNotificationsCreated } = require('../utils/notificationRealtime');
+const { canReceiveCriticalAlerts, isActiveCriticalGrievance } = require('../utils/criticalAlerts');
 
 const OFFICE_ACRONYM_MAP = {
   cas: 'CAS',
@@ -129,16 +130,6 @@ const formatDateTime = (value) => {
   }
 
   return date.toLocaleString();
-};
-
-const formatConfidence = (value) => {
-  const numericValue = Number(value);
-  if (!Number.isFinite(numericValue)) {
-    return '';
-  }
-
-  const percent = numericValue <= 1 ? numericValue * 100 : numericValue;
-  return `${percent.toFixed(1)}%`;
 };
 
 const formatRcaCategoryLabel = (value) => RCA_CATEGORY_LABELS[value] || value || '';
@@ -453,6 +444,34 @@ const getPortalUrl = () => {
   return rawUrl ? rawUrl.replace(/\/$/, '') : '';
 };
 
+const sendCriticalCaseEmails = async ({ grievance, recipients }) => {
+  const addresses = [...new Set(recipients.map((user) => String(user.email || '').trim().toLowerCase()).filter(Boolean))];
+  if (!isActiveCriticalGrievance(grievance) || !addresses.length || !(await canSendNotificationEmail())) return [];
+  const reference = buildReference(grievance);
+  const portalUrl = getPortalUrl();
+  const { html, text } = buildEmailShell({
+    heading: 'Critical grievance alert',
+    intro: 'A critical grievance requires your review. Sign in to view the case securely.',
+    detailRows: [
+      { label: 'Tracking ID', value: reference },
+      { label: 'Urgency', value: 'Critical' },
+      ...(portalUrl ? [{ label: 'Review case', value: portalUrl }] : []),
+    ],
+    footerLines: [],
+    extraHtml: /^https?:\/\//i.test(portalUrl)
+      ? `<p><a href="${escapeHtml(portalUrl)}">Sign in to review the case</a></p>` : '',
+  });
+  const results = await Promise.allSettled(addresses.map((to) => sendEmail({
+    to, subject: `Critical Grievance Alert - ${reference}`, html, text,
+  })));
+  results.forEach((result) => {
+    if (result.status === 'rejected' || result.value?.success === false) {
+      console.error('Critical alert email delivery failed:', result.reason?.message || result.value?.message || 'Unknown error');
+    }
+  });
+  return results;
+};
+
 const resolveComplainantContact = async (grievance) => {
   if (!grievance) {
     return null;
@@ -606,130 +625,62 @@ const notifyAdminsGrievanceSubmitted = async ({ grievance, actor }) => {
   return notifications;
 };
 
-const notifySuperadminsCriticalGrievanceDetected = async ({
+const notifyAdminsCriticalGrievanceDetected = async ({
   grievance,
   actor,
   aiAnalysis,
+  reAlert = false,
 }) => {
   if (!grievance?._id) {
     return { success: false, skipped: true, message: 'No grievance provided' };
   }
 
-  const urgencyLabel = String(aiAnalysis?.urgency?.label || grievance?.aiAnalysis?.urgency?.label || '')
-    .trim()
-    .toLowerCase();
-
-  if (urgencyLabel !== 'critical') {
+  if (!isActiveCriticalGrievance(grievance)) {
     return { success: false, skipped: true, message: 'Grievance urgency is not critical' };
   }
 
-  const superadmins = await User.find({
-    role: 'superadmin',
+  const staff = await User.find({
+    role: { $in: ['admin', 'superadmin'] },
     status: 'active',
-  }).select('_id name email').lean();
+  }).select('_id name email role permissions').lean();
+  const recipients = staff.filter(canReceiveCriticalAlerts);
 
-  if (!superadmins.length) {
-    return { success: false, skipped: true, message: 'No active superadmin recipients found' };
+  if (!recipients.length) {
+    return { success: false, skipped: true, message: 'No authorized admin recipients found' };
   }
 
   const reference = buildReference(grievance);
-  const categoryLabel = String(aiAnalysis?.category?.label || grievance?.category || 'Other').trim();
-  const sentimentLabel = String(aiAnalysis?.sentiment?.label || '').trim();
-  const complainantLabel = grievance.isAnonymous
-    ? 'Anonymous'
-    : grievance.complainantName
-      ? String(grievance.complainantName).trim()
-      : actor?.name
-        ? String(actor.name).trim()
-        : 'Complainant';
-  const officeLabel = grievance.office ? formatOfficeReference(grievance.office) : 'Pending review';
-  const submittedByText = grievance.isAnonymous ? 'An anonymous complainant' : `${complainantLabel}`;
-  const alertMessage = `${submittedByText} submitted grievance ${reference}, which the AI classified as critical and requiring immediate review.`;
-
-  const notifications = await Notification.insertMany(
-    superadmins.map((superadmin) => ({
-      recipient: superadmin._id,
-      type: 'grievance_submitted',
-      title: 'Critical Grievance Alert',
-      message: alertMessage,
-      relatedUser: actor?._id || grievance.complainantId || null,
+  const alertMessage = `Grievance ${reference} is classified as critical and requires immediate review.`;
+  const notifications = [];
+  // Reuse each recipient's alert on retries; a new critical transition reopens it.
+  for (const recipient of recipients) {
+    const filter = {
+      recipient: recipient._id,
       relatedGrievance: grievance._id,
-    }))
-  );
+      title: 'Critical Grievance Alert',
+      type: 'grievance_submitted',
+    };
+    const update = reAlert
+      ? { $set: { message: alertMessage, read: false, seen: false, acknowledgedAt: null } }
+      : { $setOnInsert: { message: alertMessage, read: false, seen: false, acknowledgedAt: null } };
+    const result = await Notification.findOneAndUpdate(filter, update, {
+      upsert: true, new: true, rawResult: true, setDefaultsOnInsert: true,
+    });
+    if (reAlert || !result.lastErrorObject?.updatedExisting) notifications.push(result.value);
+  }
 
   await emitNotificationsCreated(notifications);
+  if (!notifications.length) {
+    return { success: true, skipped: true, notificationsCreated: 0 };
+  }
 
   const emailRecipients = [...new Set(
-    superadmins
-      .map((superadmin) => String(superadmin.email || '').trim().toLowerCase())
+    recipients
+      .map((recipient) => String(recipient.email || '').trim().toLowerCase())
       .filter(Boolean)
   )];
 
-  let emailResults = [];
-
-  if ((await canSendNotificationEmail()) && emailRecipients.length > 0) {
-    const heading = 'Critical grievance alert';
-    const intro = 'a newly submitted grievance was classified by the system as critical and should be reviewed immediately.';
-    const categoryConfidence = formatConfidence(aiAnalysis?.category?.confidence);
-    const urgencyConfidence = formatConfidence(aiAnalysis?.urgency?.confidence);
-    const sentimentConfidence = formatConfidence(aiAnalysis?.sentiment?.confidence);
-    const portalUrl = getPortalUrl();
-    const aiSummary = String(aiAnalysis?.summary || grievance.description || '').trim();
-
-    const detailRows = [
-      { label: 'Reference Number', value: reference },
-      { label: 'Subject', value: String(grievance.subject || '').trim() || 'No subject provided' },
-      { label: 'Complainant', value: complainantLabel },
-      { label: 'Submitted At', value: formatDateTime(grievance.createdAt) },
-      { label: 'Office', value: officeLabel },
-      { label: 'Classified As', value: categoryLabel },
-      { label: 'Category Confidence', value: categoryConfidence },
-      { label: 'Urgency', value: formatLabel(urgencyLabel) },
-      { label: 'Urgency Confidence', value: urgencyConfidence },
-      { label: 'Sentiment', value: sentimentLabel ? formatLabel(sentimentLabel) : '' },
-      { label: 'Sentiment Confidence', value: sentimentConfidence },
-      { label: 'Incident Date', value: String(grievance.incidentDate || '').trim() },
-      { label: 'Person Involved', value: String(grievance.personInvolved || '').trim() },
-      { label: 'Portal', value: portalUrl },
-    ].filter((row) => row.value);
-
-    const extraTextSections = aiSummary ? ['', 'AI SUMMARY', '', aiSummary] : [];
-    const extraHtml = aiSummary
-      ? `
-        <div style="margin-top: 24px; border: 1px solid #fecaca; border-radius: 16px; overflow: hidden; background: linear-gradient(180deg, #fff7ed 0%, #fff1f2 100%);">
-          <div style="padding: 18px 20px; border-bottom: 1px solid #fecaca; text-align: center;">
-            <p style="margin: 0; font-size: 14px; font-weight: 700; color: #7f1d1d;">AI Summary</p>
-          </div>
-          <div style="padding: 20px; text-align: center; font-size: 14px; line-height: 1.8; color: #1f2937; white-space: pre-wrap;">${escapeHtml(aiSummary)}</div>
-        </div>
-      `
-      : '';
-
-    const footerLines = [
-      portalUrl ? `Portal: ${portalUrl}` : '',
-      'Log in to the Grievance Management System and review this case as soon as possible.',
-    ].filter(Boolean);
-
-    emailResults = await Promise.allSettled(
-      emailRecipients.map((emailAddress) => {
-        const { html, text } = buildEmailShell({
-          heading,
-          intro: `Hello Superadmin, ${intro}`,
-          detailRows,
-          footerLines,
-          extraHtml,
-          extraTextSections,
-        });
-
-        return sendEmail({
-          to: emailAddress,
-          subject: `Critical Grievance Alert - ${reference}`,
-          html,
-          text,
-        });
-      })
-    );
-  }
+  const emailResults = await sendCriticalCaseEmails({ grievance, recipients });
 
   return {
     success: true,
@@ -921,7 +872,7 @@ const notifyOfficeHandlerAssignment = async ({ grievance, assignee, actor }) => 
     return null;
   }
 
-  return createNotification({
+  const notification = await createNotification({
     recipient: assignee._id,
     type: 'office_handler_assignment',
     title: 'New Grievance Assigned',
@@ -929,6 +880,8 @@ const notifyOfficeHandlerAssignment = async ({ grievance, assignee, actor }) => 
     relatedUser: actor?._id || null,
     relatedGrievance: grievance._id,
   });
+  await sendCriticalCaseEmails({ grievance, recipients: [assignee] });
+  return notification;
 };
 
 const notifyOfficeHandlersGrievanceRouted = async ({ grievance, officeValues = [], actor }) => {
@@ -954,7 +907,7 @@ const notifyOfficeHandlersGrievanceRouted = async ({ grievance, officeValues = [
     $or: normalizedOfficeValues.map((value) => ({
       office: { $regex: `^${value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, $options: 'i' },
     })),
-  }).select('_id').lean();
+  }).select('_id email').lean();
 
   if (!handlers.length) {
     return [];
@@ -972,6 +925,7 @@ const notifyOfficeHandlersGrievanceRouted = async ({ grievance, officeValues = [
   );
 
   await emitNotificationsCreated(notifications);
+  await sendCriticalCaseEmails({ grievance, recipients: handlers });
   return notifications;
 };
 
@@ -1001,5 +955,5 @@ module.exports = {
   notifyOfficeHandlersGrievanceRouted,
   notifyOfficeHandlerOfficeUpdated,
   notifyOfficeHandlerVerified,
-  notifySuperadminsCriticalGrievanceDetected,
+  notifyAdminsCriticalGrievanceDetected,
 };

@@ -3,6 +3,7 @@ import { BellIcon } from "../icons";
 import { axiosInstance } from "../../services/authService";
 import { formatNotificationMessage } from "../../utils/notificationFormatting";
 import { useRealTimeNotifications } from "../../hooks/useRealTime";
+import { compareNotificationPriority, isActiveCriticalNotification } from "../../utils/notificationPriority";
 
 const mergeNotifications = (currentNotifications, incomingNotifications) => {
   const notificationsById = new Map(
@@ -19,7 +20,7 @@ const mergeNotifications = (currentNotifications, incomingNotifications) => {
   });
 
   return Array.from(notificationsById.values()).sort(
-    (left, right) => new Date(right.createdAt || 0).getTime() - new Date(left.createdAt || 0).getTime()
+    compareNotificationPriority
   );
 };
 
@@ -34,7 +35,7 @@ const timeAgo = (date, now) => {
   return `${days}d ago`;
 };
 
-const AdminNotificationsBell = ({ onViewAll }) => {
+const AdminNotificationsBell = ({ onViewAll, onOpenNotification, criticalCount = 0 }) => {
   const {
     unreadCount: realTimeUnreadCount,
     notifications: realTimeNotifications,
@@ -50,7 +51,7 @@ const AdminNotificationsBell = ({ onViewAll }) => {
     try {
       const response = await axiosInstance.get("/notifications");
       if (response.data?.success) {
-        setNotifications(response.data.notifications || []);
+        setNotifications([...(response.data.notifications || [])].sort(compareNotificationPriority));
         setRealTimeUnreadCount(response.data.unreadCount || 0);
       }
     } catch {
@@ -61,9 +62,11 @@ const AdminNotificationsBell = ({ onViewAll }) => {
   useEffect(() => {
     fetchNotifications();
     const clockInterval = setInterval(() => setNow(Date.now()), 60000);
+    const refreshInterval = setInterval(fetchNotifications, 30000);
 
     return () => {
       clearInterval(clockInterval);
+      clearInterval(refreshInterval);
     };
   }, [fetchNotifications]);
 
@@ -118,9 +121,14 @@ const AdminNotificationsBell = ({ onViewAll }) => {
   };
 
   return (
-    <div className="relative" ref={bellRef}>
+    <div className="relative flex items-center gap-2" ref={bellRef}>
+      {criticalCount > 0 && (
+        <span className="whitespace-nowrap text-xs font-semibold text-red-700">{criticalCount} critical</span>
+      )}
       <button
         type="button"
+        aria-label={`Notifications, ${realTimeUnreadCount} unread, ${criticalCount} critical cases`}
+        aria-expanded={dropdownOpen}
         onClick={() => {
           setDropdownOpen((open) => {
             const nextOpen = !open;
@@ -141,11 +149,12 @@ const AdminNotificationsBell = ({ onViewAll }) => {
       </button>
 
       {dropdownOpen && (
-        <div className="absolute right-0 top-full z-50 mt-2 w-96 overflow-hidden rounded-xl border border-gray-200 bg-white shadow-2xl">
+        <div className="absolute right-0 top-full z-50 mt-2 w-[min(24rem,calc(100vw-2rem))] overflow-hidden rounded-xl border border-gray-200 bg-white shadow-2xl">
           <div className="flex items-center justify-between border-b border-gray-100 px-4 py-3">
             <div>
               <h3 className="text-sm font-bold text-gray-900">Notifications</h3>
               <p className="text-xs text-gray-500">{realTimeUnreadCount} unread</p>
+              {criticalCount > 0 && <p className="mt-1 text-xs font-semibold text-red-700">{criticalCount} critical {criticalCount === 1 ? 'case' : 'cases'}</p>}
             </div>
             <div className="flex items-center gap-3">
               {realTimeUnreadCount > 0 && (
@@ -179,10 +188,15 @@ const AdminNotificationsBell = ({ onViewAll }) => {
                     if (!notification.read) {
                       markAsRead(notification._id);
                     }
-                    handleViewAll();
+                    setDropdownOpen(false);
+                    if (onOpenNotification) {
+                      onOpenNotification(notification);
+                    } else {
+                      onViewAll?.();
+                    }
                   }}
                   className={`w-full px-4 py-3 text-left transition-colors hover:bg-gray-50 ${
-                    notification.read ? "bg-white" : "bg-blue-50/50"
+                    isActiveCriticalNotification(notification) ? "border-l-4 border-red-500 bg-red-50/60 hover:bg-red-100/60" : notification.read ? "bg-white" : "bg-blue-50/50"
                   }`}
                 >
                   <div className="min-w-0">
@@ -190,8 +204,14 @@ const AdminNotificationsBell = ({ onViewAll }) => {
                       <p className={`truncate text-sm ${notification.read ? "font-medium text-gray-800" : "font-semibold text-gray-900"}`}>
                         {notification.title}
                       </p>
+                      {isActiveCriticalNotification(notification) && (
+                        <span className="inline-flex shrink-0 rounded-full bg-red-100 px-2 py-0.5 text-xs font-bold text-red-700">Critical</span>
+                      )}
                       {!notification.read && <span className="h-2 w-2 rounded-full bg-blue-500" />}
                     </div>
+                    {notification.relatedGrievance?.referenceNumber && (
+                      <p className="mt-1 text-xs font-semibold text-blue-700">{notification.relatedGrievance.referenceNumber}</p>
+                    )}
                     <p className="mt-1 line-clamp-2 text-xs text-gray-500">{formatNotificationMessage(notification)}</p>
                     <p className="mt-1 text-[11px] text-gray-400">{timeAgo(notification.createdAt, now)}</p>
                   </div>

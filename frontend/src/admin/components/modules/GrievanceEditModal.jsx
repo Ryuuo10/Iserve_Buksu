@@ -1,4 +1,4 @@
-import { normalizeAiCategoryLabel } from '../../../utils/aiAnalysis';
+import { normalizeAiCategoryLabel, getModelAnalysisForDisplay, isPredefinedAiAnalysis } from '../../../utils/aiAnalysis';
 
 const fmtStatus = (v) => String(v || '').replace('_', ' ').toUpperCase();
 const fmtReadable = (value, fallback = '--') => {
@@ -220,6 +220,8 @@ const GrievanceEditModal = ({
   offices = [],
   value,
   saving = false,
+  reanalyzing = false,
+  onReanalyze,
   currentUser,
   onChange,
   onSave,
@@ -245,25 +247,26 @@ const GrievanceEditModal = ({
   const parsedDescription = parseDescriptionDetails(grievance.description);
   const isRejectedSelection = selectedStatus === 'rejected';
   const hasOverride = !!grievance.aiAnalysisOverrideAt;
+  const modelAnalysis = getModelAnalysisForDisplay(grievance.aiAnalysis);
   const effectiveAnalysis = hasOverride
     ? {
-        ...grievance.aiAnalysis,
+        ...modelAnalysis,
         ...grievance.aiAnalysisOverride,
         category: {
-          ...grievance.aiAnalysis?.category,
+          ...modelAnalysis?.category,
           ...grievance.aiAnalysisOverride?.category,
         },
         urgency: {
-          ...grievance.aiAnalysis?.urgency,
+          ...modelAnalysis?.urgency,
           ...grievance.aiAnalysisOverride?.urgency,
         },
         sentiment: {
-          ...grievance.aiAnalysis?.sentiment,
+          ...modelAnalysis?.sentiment,
           ...grievance.aiAnalysisOverride?.sentiment,
         },
       }
-    : grievance.aiAnalysis;
-  const aiStatus = grievance.aiAnalysisStatus;
+    : modelAnalysis;
+  const aiStatus = isPredefinedAiAnalysis(grievance.aiAnalysis) ? 'failed' : grievance.aiAnalysisStatus;
   const aiCategoryLabel = normalizeAiCategoryLabel(effectiveAnalysis?.category?.label, '');
   const aiUrgencyLabel = effectiveAnalysis?.urgency?.label;
   const aiSentimentLabel = effectiveAnalysis?.sentiment?.label;
@@ -408,7 +411,16 @@ const GrievanceEditModal = ({
             <p className="text-xs text-gray-500 mt-1">The grievance content is read-only in admin edit mode.</p>
           </div>
 
-          {grievance.aiAnalysis ? (
+          {isSuperadmin && onReanalyze && (
+            <div className="flex justify-end">
+              <button type="button" onClick={onReanalyze} disabled={saving}
+                className="rounded-lg border border-sky-300 px-4 py-2 text-sm font-semibold text-sky-700 hover:bg-sky-50 disabled:opacity-50">
+                {reanalyzing ? 'Analyzing...' : 'Reanalyze with AI'}
+              </button>
+            </div>
+          )}
+
+          {modelAnalysis || hasOverride ? (
             <div className="rounded-[26px] border border-sky-200/80 bg-[radial-gradient(circle_at_top_left,_rgba(14,165,233,0.15),_rgba(255,255,255,0.96)_55%)] p-5 shadow-[0_20px_55px_-34px_rgba(14,165,233,0.45)] text-left">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="min-w-0">
@@ -434,33 +446,33 @@ const GrievanceEditModal = ({
               )}
 
               <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
-                <div className="rounded-2xl border border-sky-100 bg-white/85 p-4 shadow-sm">
+                <div className="min-w-0 rounded-2xl border border-sky-100 bg-white/85 p-4 shadow-sm">
                   <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-sky-700">Complaint Type</p>
-                  <p className="mt-2 text-base font-semibold text-slate-900">{complaintTypeLabel}</p>
+                  <p className="mt-2 text-sm font-semibold leading-6 text-slate-900 [overflow-wrap:anywhere]">{complaintTypeLabel}</p>
                   <p className="mt-2 text-xs text-slate-500">AI Confidence: {fmtConfidence(effectiveAnalysis?.category?.confidence)}</p>
                 </div>
-                <div className="rounded-2xl border border-amber-100 bg-white/85 p-4 shadow-sm">
+                <div className="min-w-0 rounded-2xl border border-amber-100 bg-white/85 p-4 shadow-sm">
                   <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-amber-700">Urgency Level</p>
-                  <p className="mt-2 text-base font-semibold text-slate-900">{urgencyLevelLabel}</p>
+                  <p className="mt-2 text-sm font-semibold leading-6 text-slate-900 [overflow-wrap:anywhere]">{urgencyLevelLabel}</p>
                   <p className="mt-2 text-xs text-slate-500">AI Confidence: {fmtConfidence(effectiveAnalysis?.urgency?.confidence)}</p>
                 </div>
-                <div className="rounded-2xl border border-emerald-100 bg-white/85 p-4 shadow-sm">
+                <div className="min-w-0 rounded-2xl border border-emerald-100 bg-white/85 p-4 shadow-sm">
                   <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-emerald-700">Sentiment</p>
-                  <p className="mt-2 text-base font-semibold text-slate-900">{sentimentLabel}</p>
+                  <p className="mt-2 text-sm font-semibold leading-6 text-slate-900 [overflow-wrap:anywhere]">{sentimentLabel}</p>
                   <p className="mt-2 text-xs text-slate-500">AI Confidence: {fmtConfidence(effectiveAnalysis?.sentiment?.confidence)}</p>
                 </div>
               </div>
             </div>
-          ) : grievance.aiAnalysisStatus === 'pending' ? (
+          ) : aiStatus === 'pending' ? (
             <div className="rounded-[26px] border border-amber-200 bg-[linear-gradient(135deg,rgba(251,191,36,0.16),rgba(255,255,255,0.96))] p-5 shadow-[0_20px_55px_-34px_rgba(245,158,11,0.32)]">
               <p className="text-xs font-semibold uppercase tracking-[0.22em] text-amber-700">AI Analysis</p>
               <p className="mt-3 text-sm font-medium text-amber-900">The trained models are still analyzing this complaint.</p>
               <p className="mt-2 text-sm leading-6 text-amber-800">This panel will update automatically with complaint type, urgency level, summary, and sentiment.</p>
             </div>
-          ) : grievance.aiAnalysisStatus === 'failed' ? (
+          ) : aiStatus === 'failed' ? (
             <div className="rounded-[26px] border border-rose-200 bg-[linear-gradient(135deg,rgba(251,113,133,0.14),rgba(255,255,255,0.96))] p-5 shadow-[0_20px_55px_-34px_rgba(244,63,94,0.26)]">
               <p className="text-xs font-semibold uppercase tracking-[0.22em] text-rose-700">AI Analysis</p>
-              <p className="mt-3 text-sm font-medium text-rose-900">The grievance was saved, but the AI analysis could not be generated yet.</p>
+              <p className="mt-3 text-sm font-medium text-rose-900">{isPredefinedAiAnalysis(grievance.aiAnalysis) ? 'The saved result was rule-based, not a trained model prediction. Reanalyze this case to obtain model confidence.' : 'The grievance was saved, but the AI analysis could not be generated yet.'}</p>
               <p className="mt-2 text-sm leading-6 text-rose-800">Please verify that the local AI models and Python dependencies are available on the backend server.</p>
               {grievance.aiAnalysisError && (
                 <div className="mt-4 rounded-2xl border border-rose-100 bg-white/85 p-4 shadow-sm">

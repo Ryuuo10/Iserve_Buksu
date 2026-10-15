@@ -15,6 +15,15 @@ const CATEGORY_LABEL_ALIASES = {
   general: 'Other',
 };
 
+export const isPredefinedAiAnalysis = (analysis) => !!analysis && (
+  /fallback/i.test(String(analysis.source || '')) ||
+  ['category', 'urgency', 'sentiment'].some((key) =>
+    /fallback|safety_override/i.test(String(analysis[key]?.rawLabel || ''))
+  )
+);
+
+export const getModelAnalysisForDisplay = (analysis) => isPredefinedAiAnalysis(analysis) ? null : analysis;
+
 export const normalizeAiCategoryLabel = (value, fallback = '--') => {
   const raw = String(value || '').trim();
   if (!raw) {

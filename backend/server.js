@@ -40,6 +40,7 @@ app.use((req, res, next) => {
 app.use(cors({
   origin: [
     process.env.FRONTEND_URL,
+    'https://capstone-frontend-iojn.onrender.com',
     'http://localhost:5173',
     'http://127.0.0.1:5173',
     'http://localhost:5174',
@@ -88,6 +89,7 @@ const io = socketIO(server, {
   cors: {
     origin: [
       process.env.FRONTEND_URL,
+      'https://capstone-frontend-iojn.onrender.com',
       'http://localhost:5173',
       'http://127.0.0.1:5173',
       'http://localhost:5174',
@@ -277,6 +279,12 @@ server.on('error', (err) => {
 
 startServer();
 
-setTimeout(() => {
-  warmupAiWorker().catch(() => {});
-}, 250);
+const shouldWarmupAiWorker = process.env.AI_PIPELINE_WARMUP === 'true';
+
+if (shouldWarmupAiWorker) {
+  setTimeout(() => {
+    warmupAiWorker().catch(() => {});
+  }, 250);
+} else {
+  console.log('[ai_pipeline] Startup warmup disabled. Set AI_PIPELINE_WARMUP=true to enable it.');
+}

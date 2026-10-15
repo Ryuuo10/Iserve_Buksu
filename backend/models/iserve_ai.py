@@ -677,12 +677,7 @@ def summarize(text):
 
 def classify_with_confidence(text, tokenizer, model, group):
     if not tokenizer or not model:
-        if group == "category":
-            return classify_category_fallback(text)
-        if group == "urgency":
-            return classify_urgency_fallback(text)
-        if group == "sentiment":
-            return classify_sentiment_fallback(text)
+        raise RuntimeError(f"Trained {group} model is unavailable; check model files and Python dependencies")
 
     inputs = prepare_inputs(tokenizer, model, text, 512)
 
@@ -712,14 +707,9 @@ def analyze(text):
     category_result = classify_with_confidence(analysis_text, cls_tokenizer, cls_model, "category")
     urgency_result = classify_with_confidence(analysis_text, urg_tokenizer, urg_model, "urgency")
     sentiment_result = classify_with_confidence(analysis_text, sent_tokenizer, sent_model, "sentiment")
-    category_result, urgency_result, sentiment_result = apply_safety_overrides(
-        analysis_text,
-        category_result,
-        urgency_result,
-        sentiment_result,
-    )
 
     return {
+        "source": "trained_model",
         "summary": summary,
         "category": category_result,
         "urgency": urgency_result,

@@ -1,7 +1,7 @@
 import RootCauseAnalysisView, { FishboneAnalysisPanel } from './RootCauseAnalysisView';
 import { hasFishboneContent, hasRcaContent } from '../../../utils/rcaReport';
 import GrievanceStatusTracker from '../../../complainant/components/modules/GrievanceStatusTracker';
-import { normalizeAiCategoryLabel } from '../../../utils/aiAnalysis';
+import { normalizeAiCategoryLabel, getModelAnalysisForDisplay, isPredefinedAiAnalysis } from '../../../utils/aiAnalysis';
 import { getGrievanceSlaStatus } from '../../../utils/grievanceSla';
 import ConversationTranscript from '../../../components/ConversationTranscript';
 import AttachmentPreviewCard from '../../../components/AttachmentPreviewCard';
@@ -88,25 +88,26 @@ const GrievanceDetailsModal = ({ isOpen, grievance, onClose, currentUser, onStat
     ? 'Hidden for anonymous filing'
     : grievance.complainantId?.contact || grievance.complainantId?.phone || '--';
   const hasOverride = !!grievance.aiAnalysisOverrideAt;
+  const modelAnalysis = getModelAnalysisForDisplay(grievance.aiAnalysis);
   const effectiveAnalysis = hasOverride
     ? {
-        ...grievance.aiAnalysis,
+        ...modelAnalysis,
         ...grievance.aiAnalysisOverride,
         category: {
-          ...grievance.aiAnalysis?.category,
+          ...modelAnalysis?.category,
           ...grievance.aiAnalysisOverride?.category,
         },
         urgency: {
-          ...grievance.aiAnalysis?.urgency,
+          ...modelAnalysis?.urgency,
           ...grievance.aiAnalysisOverride?.urgency,
         },
         sentiment: {
-          ...grievance.aiAnalysis?.sentiment,
+          ...modelAnalysis?.sentiment,
           ...grievance.aiAnalysisOverride?.sentiment,
         },
       }
-    : grievance.aiAnalysis;
-  const analysisStatus = hasOverride ? 'completed' : grievance.aiAnalysisStatus;
+    : modelAnalysis;
+  const analysisStatus = hasOverride ? 'completed' : isPredefinedAiAnalysis(grievance.aiAnalysis) ? 'failed' : grievance.aiAnalysisStatus;
   const categoryLabel = effectiveAnalysis?.category?.label
     ? normalizeAiCategoryLabel(effectiveAnalysis.category.label)
     : (analysisStatus === 'pending' ? 'Analyzing' : analysisStatus === 'failed' ? 'Unavailable' : normalizeAiCategoryLabel(grievance.category || 'general', 'General'));
@@ -209,7 +210,7 @@ const GrievanceDetailsModal = ({ isOpen, grievance, onClose, currentUser, onStat
                   </div>
                 )}
 
-                {grievance.aiAnalysis ? (
+                {modelAnalysis || hasOverride ? (
                   <div className="mt-4 rounded-[26px] border border-sky-200/80 bg-[radial-gradient(circle_at_top_left,_rgba(14,165,233,0.15),_rgba(255,255,255,0.96)_55%)] p-5 shadow-[0_20px_55px_-34px_rgba(14,165,233,0.45)]">
                     <div className="flex items-center justify-between gap-3">
                       <div>
@@ -263,7 +264,7 @@ const GrievanceDetailsModal = ({ isOpen, grievance, onClose, currentUser, onStat
                 ) : analysisStatus === 'failed' ? (
                 <div className="mt-4 rounded-[26px] border border-rose-200 bg-[linear-gradient(135deg,rgba(251,113,133,0.14),rgba(255,255,255,0.96))] p-5 shadow-[0_20px_55px_-34px_rgba(244,63,94,0.26)]">
                   <p className="text-xs font-semibold uppercase tracking-[0.22em] text-rose-700">AI Analysis</p>
-                  <p className="mt-3 text-sm font-medium text-rose-900">The grievance was saved, but the AI analysis could not be generated yet.</p>
+                  <p className="mt-3 text-sm font-medium text-rose-900">{isPredefinedAiAnalysis(grievance.aiAnalysis) ? 'The saved result was rule-based, not a trained model prediction. Open Edit Grievance and reanalyze this case.' : 'The grievance was saved, but the AI analysis could not be generated yet.'}</p>
                   <p className="mt-2 text-sm leading-6 text-rose-800">Please verify that the local AI models and Python dependencies are available on the backend server.</p>
                   {grievance.aiAnalysisError && (
                     <div className="mt-4 rounded-2xl border border-rose-100 bg-white/85 p-4 shadow-sm">

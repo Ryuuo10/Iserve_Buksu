@@ -4,7 +4,7 @@ const { getIO } = require('./socketServer');
 
 const NOTIFICATION_POPULATION = [
   { path: 'relatedUser', select: 'name email role profilePicture' },
-  { path: 'relatedGrievance', select: 'referenceNumber subject category priority office department status isAnonymous' },
+  { path: 'relatedGrievance', select: 'referenceNumber subject category priority office department status archived aiAnalysisOverride.urgency.label isAnonymous' },
 ];
 
 const getRecipientId = (notification) => {

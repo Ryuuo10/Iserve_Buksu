@@ -25,6 +25,7 @@ const notificationSchema = new mongoose.Schema(
     read: { type: Boolean, default: false },
     seen: { type: Boolean, default: false, index: true },
     seenAt: { type: Date, default: null },
+    acknowledgedAt: { type: Date, default: null },
   },
   { timestamps: true }
 );

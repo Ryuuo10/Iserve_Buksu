@@ -21,7 +21,10 @@ tmp_pdf_compare/
 .codex-ai-port-backup-*/
 .agents/
 .git.stale-pointer
+.github-push-temp/
 backend/.venv-ai/
+__pycache__/
+*.pyc
 *.local
 
 # Local environment files
@@ -61,3 +64,7 @@ backend/__pycache__/
 backend/models/__pycache__/
 temp_ai_input.txt
 *.safetensors
+ai-service/models/classification/
+ai-service/models/urgency/
+ai-service/models/sentiment/
+ai-service/models/summarizer/

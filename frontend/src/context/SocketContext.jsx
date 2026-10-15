@@ -1,10 +1,15 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import io from 'socket.io-client';
+import { useLocation } from 'react-router-dom';
 import { getLoginRouteForRole } from '../utils/authRoutes';
 
 const SocketContext = createContext(null);
 
 export const SocketProvider = ({ children }) => {
+  // Navigation after login must recheck credentials: same-tab storage emits no storage event.
+  useLocation();
+  const token = sessionStorage.getItem('authToken') || sessionStorage.getItem('token');
+  const userId = sessionStorage.getItem('userId');
   const [socket, setSocket] = useState(null);
   const [isConnected, setIsConnected] = useState(false);
   const [notifications, setNotifications] = useState([]);
@@ -16,19 +21,26 @@ export const SocketProvider = ({ children }) => {
     // Connect to the Socket.IO server with JWT token from sessionStorage
     const backendURL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:5000';
     // Get token from sessionStorage (per-tab isolation) NOT localStorage
-    const token = sessionStorage.getItem('authToken') || sessionStorage.getItem('token');
-    const userId = sessionStorage.getItem('userId');
+    let active = true;
+    queueMicrotask(() => {
+      if (!active) return;
+      setNotifications([]);
+      setUnreadCount(0);
+      setGrievanceUpdates({});
+      setIsConnected(false);
+      setSocket(null);
+    });
 
     if (!token || !userId) {
       console.log('ℹ️ No auth token in sessionStorage, skipping Socket.IO connection');
-      return;
+      return () => { active = false; };
     }
 
     const newSocket = io(backendURL, {
       reconnection: true,
       reconnectionDelay: 1000,
       reconnectionDelayMax: 5000,
-      reconnectionAttempts: 5,
+      reconnectionAttempts: Infinity,
       transports: ['websocket', 'polling'],
       // Pass JWT token for authentication
       auth: {
@@ -142,7 +154,9 @@ export const SocketProvider = ({ children }) => {
       });
     });
 
-    setSocket(newSocket);
+    queueMicrotask(() => {
+      if (active) setSocket(newSocket);
+    });
 
     // Listen for auth changes within this tab
     const handleStorageChange = (e) => {
@@ -177,12 +191,13 @@ export const SocketProvider = ({ children }) => {
     window.addEventListener('storage', handleStorageChange);
 
     return () => {
+      active = false;
       window.removeEventListener('storage', handleStorageChange);
       if (newSocket) {
         newSocket.disconnect();
       }
     };
-  }, []);
+  }, [token, userId]);
 
   const emitEvent = useCallback((eventName, data) => {
     if (socket) {

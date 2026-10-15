@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import Swal from 'sweetalert2';
 import adminService from '../../services/adminService';
 import {
   ADMIN_PERMISSION_GROUPS,
@@ -47,6 +48,29 @@ const AdminUsersModule = () => {
   const [availablePermissions, setAvailablePermissions] = useState(ADMIN_PERMISSION_GROUPS);
   const [formData, setFormData] = useState(createDefaultFormData());
   const [message, setMessage] = useState({ type: '', text: '' });
+  const [fieldErrors, setFieldErrors] = useState({});
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!message.text) return;
+    Swal.fire({
+      toast: true,
+      position: 'top-end',
+      icon: message.type === 'success' ? 'success' : 'error',
+      title: message.type === 'success' ? 'Success' : 'Action blocked',
+      text: message.text,
+      showConfirmButton: false,
+      showCloseButton: true,
+      timer: message.type === 'success' ? 5000 : undefined,
+      timerProgressBar: message.type === 'success',
+    });
+  }, [message]);
+
+  const inputClassName = (field) => `w-full rounded-xl border px-4 py-3 text-sm text-slate-900 outline-none transition disabled:bg-slate-100 disabled:text-slate-500 ${
+    fieldErrors[field]
+      ? 'border-rose-500 focus:border-rose-500 focus:ring-4 focus:ring-rose-100'
+      : 'border-slate-300 focus:border-blue-500 focus:ring-4 focus:ring-blue-100'
+  }`;
 
   useEffect(() => {
     fetchAdmins();
@@ -91,6 +115,11 @@ const AdminUsersModule = () => {
       ...prev,
       [name]: value,
     }));
+    setFieldErrors((prev) => ({
+      ...prev,
+      [name]: '',
+      ...(name === 'password' ? { confirmPassword: '' } : {}),
+    }));
   };
 
   const handlePermissionToggle = (permissionId) => {
@@ -117,41 +146,45 @@ const AdminUsersModule = () => {
   };
 
   const validateForm = () => {
+    const errors = {};
     if (!String(formData.name || '').trim()) {
-      return 'Full name is required';
+      errors.name = 'Full name is required';
     }
 
     if (!editingAdmin) {
       if (!String(formData.email || '').trim()) {
-        return 'Email address is required';
-      }
-
-      if (!emailRegex.test(formData.email)) {
-        return 'Enter a valid email address';
+        errors.email = 'Email address is required';
+      } else if (!emailRegex.test(formData.email.trim())) {
+        errors.email = 'Enter a valid email address';
       }
     }
 
-    if (!editingAdmin || formData.password) {
+    if (!editingAdmin || formData.password || formData.confirmPassword) {
       if (String(formData.password || '').length < 8) {
-        return 'Password must be at least 8 characters';
+        errors.password = 'Password must be at least 8 characters';
       }
 
       if (formData.password !== formData.confirmPassword) {
-        return 'Passwords do not match';
+        errors.confirmPassword = 'Passwords do not match';
       }
     }
 
-    return '';
+    return errors;
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    const validationError = validateForm();
-    if (validationError) {
-      setMessage({ type: 'error', text: validationError });
+    if (saving) return;
+    const errors = validateForm();
+    setFieldErrors(errors);
+    const firstInvalidField = Object.keys(errors)[0];
+    if (firstInvalidField) {
+      setMessage({ type: 'error', text: errors[firstInvalidField] });
+      e.currentTarget.elements.namedItem(firstInvalidField)?.focus();
       return;
     }
 
+    setSaving(true);
     try {
       let response;
       if (editingAdmin) {
@@ -182,10 +215,13 @@ const AdminUsersModule = () => {
     } catch (error) {
       console.error('Error:', error);
       setMessage({ type: 'error', text: error.message || 'Failed to save admin' });
+    } finally {
+      setSaving(false);
     }
   };
 
   const handleEdit = (admin) => {
+    setFieldErrors({});
     setEditingAdmin(admin);
     setFormData({
       name: admin.name,
@@ -224,6 +260,8 @@ const AdminUsersModule = () => {
   };
 
   const handleCancel = () => {
+    setFieldErrors({});
+    Swal.close();
     setShowForm(false);
     setEditingAdmin(null);
     setFormData(createDefaultFormData());
@@ -254,6 +292,8 @@ const AdminUsersModule = () => {
               setShowForm(true);
               setEditingAdmin(null);
               setFormData(createDefaultFormData());
+              setFieldErrors({});
+              Swal.close();
               setMessage({ type: '', text: '' });
             }}
             className="inline-flex items-center justify-center rounded-2xl bg-gradient-to-r from-blue-500 to-indigo-600 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:opacity-95"
@@ -268,19 +308,6 @@ const AdminUsersModule = () => {
         <StatCard label="Superadmins" value={superadminCount} tone="purple" />
         <StatCard label="Permission Rules" value={totalPermissionCount} tone="emerald" />
       </div>
-
-      {message.text && (
-        <div
-          className={`rounded-2xl border px-5 py-4 ${
-            message.type === 'success'
-              ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
-              : 'border-rose-200 bg-rose-50 text-rose-800'
-          }`}
-        >
-          <p className="text-sm font-semibold">{message.type === 'success' ? 'Success' : 'Action blocked'}</p>
-          <p className="mt-1 text-sm">{message.text}</p>
-        </div>
-      )}
 
       {showForm && (
         <div className="overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-sm">
@@ -301,34 +328,42 @@ const AdminUsersModule = () => {
             </div>
           </div>
 
-          <form onSubmit={handleSubmit} className="grid gap-8 px-7 py-7 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)]">
+          <form noValidate onSubmit={handleSubmit} className="grid items-start gap-6 px-4 py-5 sm:px-7 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)]">
             <div className="space-y-6">
               <div className="rounded-2xl border border-slate-200 bg-white p-6">
                 <h4 className="text-sm font-semibold uppercase tracking-[0.22em] text-slate-500">Identity</h4>
                 <div className="mt-5 grid gap-4">
                   <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-2">Full Name</label>
+                    <label htmlFor="admin-name" className="block text-sm font-medium text-slate-700 mb-2">Full Name</label>
                     <input
+                      id="admin-name"
                       type="text"
                       name="name"
                       value={formData.name}
                       onChange={handleInputChange}
-                      className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                      className={inputClassName('name')}
+                      aria-invalid={!!fieldErrors.name}
+                      aria-describedby={fieldErrors.name ? 'admin-name-error' : undefined}
                       placeholder="Enter full name"
                     />
+                    {fieldErrors.name && <p id="admin-name-error" className="mt-2 text-left text-sm text-rose-600">{fieldErrors.name}</p>}
                   </div>
 
                   <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-2">Email Address</label>
+                    <label htmlFor="admin-email" className="block text-sm font-medium text-slate-700 mb-2">Email Address</label>
                     <input
+                      id="admin-email"
                       type="email"
                       name="email"
                       value={formData.email}
                       onChange={handleInputChange}
                       disabled={!!editingAdmin}
-                      className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100 disabled:bg-slate-100 disabled:text-slate-500"
+                      className={inputClassName('email')}
+                      aria-invalid={!!fieldErrors.email}
+                      aria-describedby={fieldErrors.email ? 'admin-email-error' : undefined}
                       placeholder="admin@buksu.edu.ph"
                     />
+                    {fieldErrors.email && <p id="admin-email-error" className="mt-2 text-left text-sm text-rose-600">{fieldErrors.email}</p>}
                   </div>
                 </div>
               </div>
@@ -337,31 +372,57 @@ const AdminUsersModule = () => {
                 <h4 className="text-sm font-semibold uppercase tracking-[0.22em] text-slate-500">Credentials</h4>
                 <div className="mt-5 grid gap-4">
                   <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-2">
+                    <label htmlFor="admin-password" className="block text-sm font-medium text-slate-700 mb-2">
                       {editingAdmin ? 'New Password (Optional)' : 'Password'}
                     </label>
                     <input
+                      id="admin-password"
                       type="password"
                       name="password"
                       value={formData.password}
                       onChange={handleInputChange}
-                      className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                      className={inputClassName('password')}
+                      aria-invalid={!!fieldErrors.password}
+                      aria-describedby={fieldErrors.password ? 'admin-password-error' : undefined}
                       placeholder={editingAdmin ? 'Leave blank to keep current password' : 'Enter password (min 8 characters)'}
                     />
+                    {fieldErrors.password && <p id="admin-password-error" className="mt-2 text-left text-sm text-rose-600">{fieldErrors.password}</p>}
                   </div>
 
                   <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-2">Confirm Password</label>
+                    <label htmlFor="admin-confirmPassword" className="block text-sm font-medium text-slate-700 mb-2">Confirm Password</label>
                     <input
+                      id="admin-confirmPassword"
                       type="password"
                       name="confirmPassword"
                       value={formData.confirmPassword}
                       onChange={handleInputChange}
-                      className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                      className={inputClassName('confirmPassword')}
+                      aria-invalid={!!fieldErrors.confirmPassword}
+                      aria-describedby={fieldErrors.confirmPassword ? 'admin-confirmPassword-error' : undefined}
                       placeholder="Confirm password"
                     />
+                    {fieldErrors.confirmPassword && <p id="admin-confirmPassword-error" className="mt-2 text-left text-sm text-rose-600">{fieldErrors.confirmPassword}</p>}
                   </div>
                 </div>
+              </div>
+
+              <div className="flex flex-wrap gap-3 border-t border-slate-200 pt-4">
+                <button
+                  type="submit"
+                  disabled={saving}
+                  className="rounded-xl bg-gradient-to-r from-slate-900 via-blue-900 to-indigo-900 px-6 py-3 text-sm font-semibold text-white shadow-sm transition hover:opacity-95 disabled:cursor-wait disabled:opacity-60"
+                >
+                  {saving ? 'Saving...' : editingAdmin ? 'Save Admin Changes' : 'Create Admin Account'}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleCancel}
+                  disabled={saving}
+                  className="rounded-xl border border-slate-300 px-6 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-60"
+                >
+                  Cancel
+                </button>
               </div>
 
               {(!editingAdmin || editingAdmin.role === 'admin') && (
@@ -469,21 +530,6 @@ const AdminUsersModule = () => {
                 </div>
               )}
 
-              <div className="flex flex-wrap gap-3 border-t border-slate-200 pt-2">
-                <button
-                  type="submit"
-                  className="rounded-2xl bg-gradient-to-r from-slate-900 via-blue-900 to-indigo-900 px-6 py-3 text-sm font-semibold text-white shadow-sm transition hover:opacity-95"
-                >
-                  {editingAdmin ? 'Save Admin Changes' : 'Create Admin Account'}
-                </button>
-                <button
-                  type="button"
-                  onClick={handleCancel}
-                  className="rounded-2xl border border-slate-300 px-6 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-                >
-                  Cancel
-                </button>
-              </div>
             </div>
           </form>
         </div>

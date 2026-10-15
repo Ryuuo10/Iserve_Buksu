@@ -4,8 +4,8 @@ const readline = require('readline');
 
 const PYTHON_CMD = process.env.AI_PIPELINE_PYTHON || 'python';
 const SCRIPT_PATH = path.join(__dirname, '..', 'models', 'iserve_ai.py');
-const STARTUP_TIMEOUT_MS = 120000;
-const REQUEST_TIMEOUT_MS = 120000;
+const STARTUP_TIMEOUT_MS = Number(process.env.AI_PIPELINE_STARTUP_TIMEOUT_MS || 60000);
+const REQUEST_TIMEOUT_MS = Number(process.env.AI_PIPELINE_REQUEST_TIMEOUT_MS || 60000);
 const MISSING_DEPENDENCY_PATTERN = /No module named ['"]([^'"]+)['"]/i;
 
 let worker = null;

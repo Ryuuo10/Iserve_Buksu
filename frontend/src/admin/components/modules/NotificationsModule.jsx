@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { axiosInstance } from "../../../services/authService";
 import { formatNotificationMessage } from "../../../utils/notificationFormatting";
 import { useRealTimeNotifications } from "../../../hooks/useRealTime";
+import { compareNotificationPriority, isActiveCriticalNotification } from "../../../utils/notificationPriority";
 
 const mergeNotifications = (currentNotifications, incomingNotifications) => {
   const notificationsById = new Map(
@@ -18,7 +19,7 @@ const mergeNotifications = (currentNotifications, incomingNotifications) => {
   });
 
   return Array.from(notificationsById.values()).sort(
-    (left, right) => new Date(right.createdAt || 0).getTime() - new Date(left.createdAt || 0).getTime()
+    compareNotificationPriority
   );
 };
 
@@ -50,7 +51,7 @@ const formatTypeLabel = (notification) => {
   return String(notification.type || "notification").replaceAll("_", " ");
 };
 
-const NotificationsModule = () => {
+const NotificationsModule = ({ onViewGrievance }) => {
   const {
     unreadCount: realTimeUnreadCount,
     notifications: realTimeNotifications,
@@ -61,24 +62,26 @@ const NotificationsModule = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  const loadNotifications = useCallback(async () => {
+  const loadNotifications = useCallback(async (showLoading = true) => {
     try {
-      setLoading(true);
+      if (showLoading) setLoading(true);
       const response = await axiosInstance.get("/notifications");
       if (response.data?.success) {
-        setNotifications(response.data.notifications || []);
+        setNotifications([...(response.data.notifications || [])].sort(compareNotificationPriority));
         setRealTimeUnreadCount(response.data.unreadCount || 0);
       }
       setError("");
     } catch (err) {
       setError(err.response?.data?.message || "Failed to load notifications");
     } finally {
-      setLoading(false);
+      if (showLoading) setLoading(false);
     }
   }, [setRealTimeUnreadCount]);
 
   useEffect(() => {
     loadNotifications();
+    const refreshInterval = setInterval(() => loadNotifications(false), 30000);
+    return () => clearInterval(refreshInterval);
   }, [loadNotifications]);
 
   useEffect(() => {
@@ -143,16 +146,33 @@ const NotificationsModule = () => {
         ) : (
           <div className="divide-y divide-gray-100">
             {notifications.map((notification) => (
-              <div key={notification._id} className={`p-5 ${notification.read ? "bg-white" : "bg-blue-50/40"}`}>
+              <div key={notification._id} className={`p-5 ${isActiveCriticalNotification(notification) ? "border-l-4 border-red-500 bg-red-50/60" : notification.read ? "bg-white" : "bg-blue-50/40"}`}>
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div className="space-y-2">
                     <div className="flex flex-wrap items-center gap-2">
                       <h3 className={`text-base ${notification.read ? "font-semibold text-gray-800" : "font-bold text-gray-900"}`}>
                         {notification.title}
                       </h3>
-                      <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${typeBadgeClass(notification.type)}`}>
-                        {formatTypeLabel(notification)}
-                      </span>
+                      {isActiveCriticalNotification(notification) && (
+                        <span className="inline-flex shrink-0 rounded-full bg-red-100 px-2.5 py-1 text-xs font-bold text-red-700">Critical</span>
+                      )}
+                      {notification.relatedGrievance?._id && onViewGrievance ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (!notification.read) markAsRead(notification._id);
+                            onViewGrievance(notification.relatedGrievance._id);
+                          }}
+                          aria-label={`Open grievance ${formatTypeLabel(notification)}`}
+                          className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold underline hover:opacity-80 ${typeBadgeClass(notification.type)}`}
+                        >
+                          {formatTypeLabel(notification)}
+                        </button>
+                      ) : (
+                        <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${typeBadgeClass(notification.type)}`}>
+                          {formatTypeLabel(notification)}
+                        </span>
+                      )}
                       {!notification.read && <span className="h-2.5 w-2.5 rounded-full bg-blue-500" />}
                     </div>
                     <p className="text-sm text-gray-600">{formatNotificationMessage(notification)}</p>

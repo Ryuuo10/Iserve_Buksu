@@ -19,7 +19,7 @@ const getTabDisplayName = (tabId) => {
   return tabNames[tabId] || tabId.replace('-', ' ');
 };
 
-const TopBar = ({ activeTab, setSidebarOpen, setActiveTab, userInfo = null }) => {
+const TopBar = ({ activeTab, setSidebarOpen, setActiveTab, onOpenNotification, userInfo = null, criticalCount = 0 }) => {
   const [currentTime, setCurrentTime] = useState(new Date());
 
   useEffect(() => {
@@ -69,7 +69,7 @@ const TopBar = ({ activeTab, setSidebarOpen, setActiveTab, userInfo = null }) =>
             <span className="text-sm font-semibold text-gray-700">{formatTime(currentTime)}</span>
           </div>
           {canAccessAdminTab(userInfo, 'notifications') && (
-            <AdminNotificationsBell onViewAll={() => setActiveTab('notifications')} />
+            <AdminNotificationsBell criticalCount={criticalCount} onOpenNotification={onOpenNotification} onViewAll={() => setActiveTab('notifications')} />
           )}
         </div>
       </div>

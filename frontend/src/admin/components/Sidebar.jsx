@@ -10,7 +10,6 @@ import {
   UsersIcon, 
   BuildingIcon, 
   ChartIcon, 
-  BellIcon,
   SettingsIcon, 
   LogoutIcon 
 } from '../icons';
@@ -86,7 +85,6 @@ const Sidebar = ({ activeTab, setActiveTab, sidebarOpen, setSidebarOpen, userInf
     const allModules = [
       { id: 'dashboard', name: 'Dashboard', icon: DashboardIcon, color: 'from-blue-500 to-cyan-500', hover: 'hover:bg-blue-500/10' },
       { id: 'grievances', name: 'Grievance Manage', icon: DocumentIcon, color: 'from-blue-500 to-cyan-500', hover: 'hover:bg-blue-500/10' },
-      { id: 'notifications', name: 'Notifications', icon: BellIcon, color: 'from-blue-500 to-cyan-500', hover: 'hover:bg-blue-500/10' },
       { id: 'users', name: 'Manage User', icon: UsersIcon, color: 'from-blue-500 to-cyan-500', hover: 'hover:bg-blue-500/10' },
       { id: 'offices', name: 'Office Manage', icon: BuildingIcon, color: 'from-blue-500 to-cyan-500', hover: 'hover:bg-blue-500/10' },
       { id: 'analytics', name: 'Analytics', icon: ChartIcon, color: 'from-blue-500 to-cyan-500', hover: 'hover:bg-blue-500/10' }

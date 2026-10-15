@@ -5,7 +5,7 @@ import { useRealTimeNotifications } from "../hooks/useRealTime";
 import { formatOfficeReference } from "../utils/notificationFormatting";
 
 const STAFF_TOAST_LIMIT = 3;
-const ADMIN_GRIEVANCE_TOAST_TITLES = new Set(["New Grievance Received", "Critical Grievance Alert"]);
+const ADMIN_GRIEVANCE_TOAST_TITLES = new Set(["New Grievance Received"]);
 const OFFICE_GRIEVANCE_TOAST_TITLES = new Set(["New Grievance Assigned"]);
 
 const isStaffGrievanceNotification = (notification, role) => {

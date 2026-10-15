@@ -10,7 +10,7 @@ import GrievanceEditModal from './GrievanceEditModal';
 import GrievanceDeleteModal from './GrievanceDeleteModal';
 import { formatGrievanceStatus } from '../../../utils/grievanceStatus';
 import { hasAdminPermission } from '../../../utils/adminPermissions';
-import { normalizeAiCategoryLabel } from '../../../utils/aiAnalysis';
+import { normalizeAiCategoryLabel, getModelAnalysisForDisplay, isPredefinedAiAnalysis } from '../../../utils/aiAnalysis';
 import { getGrievanceSlaStatus } from '../../../utils/grievanceSla';
 
 const API_BASE = `${API_BASE_URL}/admin`;
@@ -410,30 +410,31 @@ const aiMetaText = (status, confidence) => {
 const fmtEditedAt = (value) => (value ? new Date(value).toLocaleString() : '');
 
 const getEffectiveAiAnalysis = (grievance) => {
+  const modelAnalysis = getModelAnalysisForDisplay(grievance?.aiAnalysis);
   if (!grievance?.aiAnalysisOverrideAt || !grievance?.aiAnalysisOverride) {
-    return grievance?.aiAnalysis || null;
+    return modelAnalysis || null;
   }
 
   return {
-    ...grievance.aiAnalysis,
+    ...modelAnalysis,
     ...grievance.aiAnalysisOverride,
     category: {
-      ...grievance.aiAnalysis?.category,
+      ...modelAnalysis?.category,
       ...grievance.aiAnalysisOverride?.category,
     },
     urgency: {
-      ...grievance.aiAnalysis?.urgency,
+      ...modelAnalysis?.urgency,
       ...grievance.aiAnalysisOverride?.urgency,
     },
     sentiment: {
-      ...grievance.aiAnalysis?.sentiment,
+      ...modelAnalysis?.sentiment,
       ...grievance.aiAnalysisOverride?.sentiment,
     },
   };
 };
 
 const getAiStatusForDisplay = (grievance) => (
-  grievance?.aiAnalysisOverrideAt ? 'completed' : grievance?.aiAnalysisStatus
+  grievance?.aiAnalysisOverrideAt ? 'completed' : isPredefinedAiAnalysis(grievance?.aiAnalysis) ? 'failed' : grievance?.aiAnalysisStatus
 );
 
 const GrievanceManagementModule = () => {
@@ -443,6 +444,7 @@ const GrievanceManagementModule = () => {
   const [offices, setOffices] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [reanalyzing, setReanalyzing] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
@@ -530,7 +532,7 @@ const GrievanceManagementModule = () => {
   );
 
   const findRouteCategory = (college, level, department = '') => {
-    if (!college) {
+    if (!college || (level === 'department' && !String(department).trim())) {
       return null;
     }
 
@@ -1162,6 +1164,32 @@ const GrievanceManagementModule = () => {
     }
   };
 
+  const handleReanalyze = async () => {
+    if (!selectedGrievance || saving || !isSuperadmin) return;
+    try {
+      setSaving(true);
+      setReanalyzing(true);
+      const { data } = await axios.put(`${API_BASE}/grievances/${selectedGrievance._id}/ai-analysis`,
+        { version: selectedGrievance.__v }, { headers, timeout: 180000 });
+      if (!data.success) throw new Error(data.message || 'Reanalysis failed');
+      setSelectedGrievance(data.data);
+      setGrievances((current) => current.map((item) => item._id === data.data._id ? { ...item, ...data.data } : item));
+      void Swal.fire({
+        icon: 'success',
+        title: 'Success!',
+        text: 'AI analysis saved',
+        showConfirmButton: false,
+        timer: 1500,
+      });
+      await loadStats().catch((error) => console.error('Failed to refresh analysis stats:', error.message));
+    } catch (error) {
+      await Swal.fire({ icon: 'error', title: 'Analysis unavailable', text: error.response?.data?.message || error.message });
+    } finally {
+      setReanalyzing(false);
+      setSaving(false);
+    }
+  };
+
   const toggleArchivedView = async () => {
     const nextArchived = !showArchived;
     setShowArchived(nextArchived);
@@ -1239,13 +1267,14 @@ const GrievanceManagementModule = () => {
   const concernedRouteDetails = showRouteModal && selectedGrievance
     ? resolveConcernedOfficeDetails(selectedGrievance)
     : null;
-  const grievanceHasDepartment = Boolean(concernedRouteDetails?.department);
-  const routeLevelMessage = grievanceHasDepartment
-    ? 'This grievance specifies a department and will be routed directly to that department.'
-    : 'No department was specified. This grievance will be routed to the college-level office.';
+  const routeLevelMessage = routeLevel === 'department'
+    ? 'Select a department within the chosen college.'
+    : 'The grievance will be routed to the selected college-level office.';
   const routeValidationMessage = showRouteModal && routeCollege && !selectedRouteCategory
-    ? grievanceHasDepartment
-      ? 'The specified department could not be matched to an active office destination. Confirmation is disabled until the routing issue is corrected.'
+    ? routeLevel === 'department'
+      ? routeDepartmentOptions.length
+        ? 'Select an available department in this college before confirming.'
+        : 'No active departments are configured for this college. Add a department in Office Manage or choose an available college-level destination.'
       : 'The selected college could not be matched to an active college-level office destination.'
     : '';
   const routeDepartmentIsListed = routeDepartmentOptions.some((office) =>
@@ -1257,7 +1286,7 @@ const GrievanceManagementModule = () => {
         department: selectedRouteCategory.department || '',
       }
     : null;
-  const canSubmitRoute = Boolean(selectedRouteCategory && routeLevel === (grievanceHasDepartment ? 'department' : 'college'));
+  const canSubmitRoute = Boolean(selectedRouteCategory);
   const isMemoCreatedView = !showArchived && grievanceView === 'memo_created';
   const isResolvedView = !showArchived && grievanceView === 'resolved';
   const isRejectedView = !showArchived && grievanceView === 'rejected';
@@ -1710,9 +1739,15 @@ const GrievanceManagementModule = () => {
                   <select
                     value={routeCollege}
                     onChange={(event) => {
-                      setRouteCollege(event.target.value);
-                      setRouteLevel(grievanceHasDepartment ? 'department' : 'college');
-                      setRouteDepartment(grievanceHasDepartment ? concernedRouteDetails?.department || '' : '');
+                      const college = event.target.value;
+                      const hasDepartments = offices.some((office) =>
+                        normalizeOfficeKey(office.college) === normalizeOfficeKey(college) &&
+                        String(office.department || '').trim()
+                      );
+                      setRouteCollege(college);
+                      setRouteDepartment('');
+                      setRouteLevel(routeLevel === 'college' && findRouteCategory(college, 'college')
+                        ? 'college' : hasDepartments ? 'department' : 'college');
                     }}
                     className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-violet-500 focus:ring-2 focus:ring-violet-100"
                   >
@@ -1735,12 +1770,10 @@ const GrievanceManagementModule = () => {
                         value="college"
                         checked={routeLevel === 'college'}
                         onChange={() => {
-                          if (!grievanceHasDepartment) {
-                            setRouteLevel('college');
-                            setRouteDepartment('');
-                          }
+                          setRouteLevel('college');
+                          setRouteDepartment('');
                         }}
-                        disabled={grievanceHasDepartment || !findRouteCategory(routeCollege, 'college')}
+                        disabled={!findRouteCategory(routeCollege, 'college')}
                       />
                       <span>
                         <span className="block font-semibold">College-level</span>
@@ -1756,11 +1789,9 @@ const GrievanceManagementModule = () => {
                         value="department"
                         checked={routeLevel === 'department'}
                         onChange={() => {
-                          if (grievanceHasDepartment) {
-                            setRouteLevel('department');
-                          }
+                          setRouteLevel('department');
                         }}
-                        disabled={!grievanceHasDepartment || routeDepartmentOptions.length === 0}
+                        disabled={routeDepartmentOptions.length === 0}
                       />
                       <span>
                         <span className="block font-semibold">Department-level</span>
@@ -1777,18 +1808,16 @@ const GrievanceManagementModule = () => {
                     <select
                       value={routeDepartment}
                       onChange={(event) => {
-                        if (grievanceHasDepartment) {
-                          setRouteDepartment(event.target.value);
-                        }
+                        setRouteDepartment(event.target.value);
                       }}
-                      disabled
+                      disabled={routeDepartmentOptions.length === 0}
                       className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-violet-500 focus:ring-2 focus:ring-violet-100"
                     >
                       <option value="">
-                        {grievanceHasDepartment ? 'Department could not be matched' : 'Select department'}
+                        {routeDepartmentOptions.length ? 'Select department' : 'No active departments available'}
                       </option>
-                      {grievanceHasDepartment && routeDepartment && !routeDepartmentIsListed && (
-                        <option value={routeDepartment}>{formatOfficeLabel(routeDepartment)}</option>
+                      {routeDepartment && !routeDepartmentIsListed && (
+                        <option value={routeDepartment} disabled>{formatOfficeLabel(routeDepartment)} (unavailable)</option>
                       )}
                       {routeDepartmentOptions.map((office) => (
                         <option key={office.id || office.slug || office.name} value={office.department}>
@@ -1849,6 +1878,8 @@ const GrievanceManagementModule = () => {
         saving={saving}
       />
       <GrievanceEditModal
+        reanalyzing={reanalyzing}
+        onReanalyze={isSuperadmin ? handleReanalyze : undefined}
         isOpen={showEditModal}
         grievance={selectedGrievance}
         offices={offices}

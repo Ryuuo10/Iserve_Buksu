@@ -2,11 +2,11 @@ const express = require('express');
 const router = express.Router();
 const Grievance = require('../models/Grievance');
 const { authenticateToken, checkRole } = require('../middleware/auth');
-const { analyzeComplaint } = require('../services/aiPipelineClient');
+const { analyzeGrievance } = require('../services/grievanceAiAnalysis');
 const {
   notifyAdminsGrievanceSubmitted,
   notifyComplainantGrievanceSubmitted,
-  notifySuperadminsCriticalGrievanceDetected,
+  notifyAdminsCriticalGrievanceDetected,
 } = require('../services/notificationService');
 const { getSystemSettingsSnapshot } = require('../utils/systemSettings');
 const {
@@ -110,7 +110,10 @@ const mapPriorityFromAi = (aiAnalysis) => {
   return ALLOWED_PRIORITY.includes(label) ? label : 'medium';
 };
 
+
+
 const sanitizeIncidentDate = (value = '') => {
+
   const normalized = String(value || '').trim();
   if (!normalized || normalized.length > 80 || /[{}\[\]]/.test(normalized)) {
     return '';
@@ -124,25 +127,11 @@ const sanitizeIncidentDate = (value = '') => {
   return parsed.toLocaleDateString('en-US');
 };
 
-const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const analyzeComplaintWithRetry = async (text, attempts = 2) => {
-  let lastError = null;
 
-  for (let index = 0; index < attempts; index += 1) {
-    try {
-      return await analyzeComplaint(text);
-    } catch (error) {
-      lastError = error;
 
-      if (index < attempts - 1) {
-        await delay(1500);
-      }
-    }
-  }
 
-  throw lastError || new Error('AI analysis failed');
-};
+
 
 const loadRealtimeGrievance = async (grievanceId) =>
   Grievance.findById(grievanceId)
@@ -198,16 +187,7 @@ const runSubmissionPostProcessing = ({
       }),
       (async () => {
         try {
-          const aiAnalysis = await analyzeComplaintWithRetry(combinedText);
-          if (!aiAnalysis) {
-            await Grievance.findByIdAndUpdate(grievance._id, {
-              aiAnalysisStatus: 'failed',
-              aiAnalysisError: 'AI analysis returned no result',
-            });
-            const failedGrievance = await loadRealtimeGrievance(grievance._id);
-            emitGrievanceUpdate(io, failedGrievance);
-            return;
-          }
+          const aiAnalysis = await analyzeGrievance(combinedText);
 
           const nextPriority = mapPriorityFromAi(aiAnalysis);
           const updates = {
@@ -223,7 +203,7 @@ const runSubmissionPostProcessing = ({
           emitGrievanceUpdate(io, updatedGrievance);
 
           if (nextPriority === 'critical') {
-            await notifySuperadminsCriticalGrievanceDetected({
+            await notifyAdminsCriticalGrievanceDetected({
               grievance: updatedGrievance || grievance,
               actor,
               aiAnalysis,
@@ -234,11 +214,13 @@ const runSubmissionPostProcessing = ({
         } catch (error) {
           console.error('AI post-processing failed:', error.message);
           await Grievance.findByIdAndUpdate(grievance._id, {
+            aiAnalysis: null,
             aiAnalysisStatus: 'failed',
-            aiAnalysisError: String(error.message || 'AI analysis failed').slice(0, 1000),
+            aiAnalysisError: String(error.message || 'Trained AI analysis failed').slice(0, 900),
           }).catch(() => {});
-          const failedGrievance = await loadRealtimeGrievance(grievance._id).catch(() => null);
-          emitGrievanceUpdate(io, failedGrievance);
+
+          const fallbackGrievance = await loadRealtimeGrievance(grievance._id).catch(() => null);
+          emitGrievanceUpdate(io, fallbackGrievance);
         }
       })(),
     ];

@@ -9,6 +9,7 @@ import ProfileModule from "./components/modules/ProfileModule";
 import SettingsModule from "./components/modules/SettingsModule";
 import { canAccessAdminTab, getAccessibleAdminTabs } from "../utils/adminPermissions";
 import StaffGrievanceToastContainer from "../components/StaffGrievanceToastContainer";
+import CriticalCaseAlerts from "./components/CriticalCaseAlerts";
 
 const ADMIN_SELECTED_GRIEVANCE_KEY = "admin_dashboard_selected_grievance_id";
 //taskkill /F /IM node.exe
@@ -18,6 +19,8 @@ function AdminDashboard() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [userInfo, setUserInfo] = useState(null);
+  const [criticalCount, setCriticalCount] = useState(0);
+  const [caseSelectionVersion, setCaseSelectionVersion] = useState(0);
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -96,12 +99,14 @@ function AdminDashboard() {
 
   const canViewTab = (tabId) => canAccessAdminTab(userInfo, tabId);
 
-  const handleViewGrievanceToast = (grievanceId) => {
+  const handleViewGrievance = (grievanceId) => {
+    if (!grievanceId || !canViewTab('grievances')) return;
     if (grievanceId && typeof window !== "undefined") {
       localStorage.setItem(ADMIN_SELECTED_GRIEVANCE_KEY, grievanceId);
     }
 
     setActiveTab("grievances");
+    setCaseSelectionVersion((current) => current + 1);
     setSidebarOpen(false);
   };
 
@@ -110,14 +115,33 @@ function AdminDashboard() {
     setSidebarOpen(false);
   };
 
+  const handleOpenNotification = (notification) => {
+    const grievanceId = typeof notification.relatedGrievance === 'string'
+      ? notification.relatedGrievance
+      : notification.relatedGrievance?._id;
+    if (grievanceId && canViewTab('grievances')) {
+      handleViewGrievance(grievanceId);
+      return;
+    }
+    if (notification.type === 'office_verification_request' && canViewTab('offices')) {
+      setActiveTab('offices');
+      setSidebarOpen(false);
+      return;
+    }
+    handleViewNotificationToasts();
+  };
+
 
   return (
     <div className="flex h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-100">
       <StaffGrievanceToastContainer
         role={userInfo?.role}
-        onViewGrievance={handleViewGrievanceToast}
+        onViewGrievance={handleViewGrievance}
         onViewNotifications={handleViewNotificationToasts}
       />
+      {canViewTab('grievances') && canViewTab('notifications') && (
+        <CriticalCaseAlerts onViewCase={handleViewGrievance} onCountChange={setCriticalCount} />
+      )}
       {/* Sidebar */}
       <Sidebar 
         activeTab={activeTab}
@@ -131,6 +155,8 @@ function AdminDashboard() {
       <div className="flex-1 flex flex-col overflow-hidden">
         {/* Top Bar */}
         <TopBar 
+          onOpenNotification={handleOpenNotification}
+          criticalCount={criticalCount}
           activeTab={activeTab}
           sidebarOpen={sidebarOpen}
           setSidebarOpen={setSidebarOpen}
@@ -151,11 +177,13 @@ function AdminDashboard() {
             {activeTab === 'users' && canViewTab('users') && <UserManagementModule />}
             
             {/* Grievance Management View */}
-            {activeTab === 'grievances' && canViewTab('grievances') && <GrievanceManagementModule />}
+            {activeTab === 'grievances' && canViewTab('grievances') && <GrievanceManagementModule key={caseSelectionVersion} />}
             
             {/* Analytics View */}
             {activeTab === 'analytics' && canViewTab('analytics') && <AnalyticsModule />}
-            {activeTab === 'notifications' && canViewTab('notifications') && <NotificationsModule />}
+            {activeTab === 'notifications' && canViewTab('notifications') && (
+              <NotificationsModule onViewGrievance={canViewTab('grievances') ? handleViewGrievance : undefined} />
+            )}
             {activeTab === 'admin-manage' && canViewTab('admin-manage') && <AdminManageModule />}
             {activeTab === 'settings' && canViewTab('settings') && <SettingsModule />}
             {activeTab === 'profile' && canViewTab('profile') && <ProfileModule />}
