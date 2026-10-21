@@ -4,7 +4,6 @@ import { axiosInstance } from "../services/authService";
 import { useRealTimeNotifications } from "../hooks/useRealTime";
 import { formatOfficeReference } from "../utils/notificationFormatting";
 
-const STAFF_TOAST_LIMIT = 3;
 const ADMIN_GRIEVANCE_TOAST_TITLES = new Set(["New Grievance Received"]);
 const OFFICE_GRIEVANCE_TOAST_TITLES = new Set(["New Grievance Assigned"]);
 
@@ -120,23 +119,11 @@ const makeSummaryToast = (notifications, role) => ({
   id: `summary-${notifications.map((item) => item._id).join("-")}`,
   notificationIds: notifications.map((item) => item._id).filter(Boolean),
   kind: "summary",
-  title: `${notifications.length} New Grievances`,
+  title: `${notifications.length} New Grievance${notifications.length === 1 ? "" : "s"}`,
   message:
     role === "office_handler"
-      ? `You have ${notifications.length} newly assigned grievance reports requiring your attention.`
-      : `You have ${notifications.length} new grievance reports requiring your attention.`,
-  role,
-});
-
-const makeOverflowSummaryToast = (hiddenToasts, role) => ({
-  id: `overflow-${hiddenToasts.flatMap((toast) => toast.notificationIds).join("-")}`,
-  notificationIds: hiddenToasts.flatMap((toast) => toast.notificationIds).filter(Boolean),
-  kind: "summary",
-  title: `${hiddenToasts.length} Additional Grievances`,
-  message:
-    role === "office_handler"
-      ? `${hiddenToasts.length} additional grievance assignments arrived.`
-      : `${hiddenToasts.length} additional new grievances arrived.`,
+      ? `You have ${notifications.length} newly assigned grievance${notifications.length === 1 ? "" : "s"} requiring your attention.`
+      : `You have ${notifications.length} new grievance${notifications.length === 1 ? "" : "s"} requiring your attention.`,
   role,
 });
 
@@ -259,15 +246,14 @@ const StaffGrievanceToastContainer = ({ role, onViewGrievance, onViewNotificatio
     setToasts((current) => {
       const existingIds = new Set(current.map((toast) => toast.id));
       const fresh = incomingToasts.filter((toast) => !existingIds.has(toast.id));
+      if (!fresh.length) return current;
+
+      // Keep one focused dialog on screen. If more grievances arrive while it
+      // is open, replace the detail card with a count summary instead of
+      // stacking dialogs and forcing the user to scroll through them.
       const combined = [...fresh, ...current];
-
-      if (combined.length <= STAFF_TOAST_LIMIT) {
-        return combined;
-      }
-
-      const visible = combined.slice(0, STAFF_TOAST_LIMIT - 1);
-      const hidden = combined.slice(STAFF_TOAST_LIMIT - 1);
-      return [...visible, makeOverflowSummaryToast(hidden, role)];
+      const notificationIds = [...new Set(combined.flatMap((toast) => toast.notificationIds))];
+      return [makeSummaryToast(notificationIds.map((_id) => ({ _id })), role)];
     });
   }, [role]);
 
@@ -385,12 +371,10 @@ const StaffGrievanceToastContainer = ({ role, onViewGrievance, onViewNotificatio
       className="staff-notification-overlay fixed inset-0 z-[9999] flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-[2px]"
       onMouseDown={closeLatestToast}
     >
-      <div className="flex max-h-[90vh] flex-col gap-3 overflow-y-auto">
-      {toasts.map((toast) => (
-        <div key={toast.id}>
-          <ToastCard toast={toast} onClose={closeToast} onView={handleView} />
-        </div>
-      ))}
+      <div className="max-h-[90vh] overflow-y-auto">
+        {toasts.map((toast) => (
+          <ToastCard key={toast.id} toast={toast} onClose={closeToast} onView={handleView} />
+        ))}
       </div>
     </div>,
     document.body
