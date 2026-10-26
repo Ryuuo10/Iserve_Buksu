@@ -369,9 +369,7 @@ const DashboardModule = () => {
       "Physical Education",
       "Secondary Education"
     ],
-    "College of Nursing (CON)": [
-      "Nursing"
-    ],
+    "College of Nursing (CON)": [],
     "College of Technology (COT)": [
       "Automotive Technology",
       "Electronics Technology",
@@ -494,7 +492,6 @@ const DashboardModule = () => {
     const submissionType = normalizeStructuredValue(structuredData.submissionType);
     const college = normalizeStructuredValue(structuredData.college);
     const hasDepartmentField = Object.prototype.hasOwnProperty.call(structuredData, 'department');
-    const department = normalizeStructuredDepartment(structuredData.department);
     const complaintType = normalizeStructuredValue(structuredData.complaintType);
     const description = normalizeStructuredValue(structuredData.description);
     const originalDescription = normalizeStructuredValue(structuredData.originalDescription);
@@ -502,6 +499,11 @@ const DashboardModule = () => {
     const date = normalizeIncidentDateInput(normalizeStructuredValue(structuredData.date));
     const personInvolved = normalizeStructuredValue(structuredData.personInvolved);
     const resolvedOffice = resolveOfficeSelection(college) || college;
+    const selectedOfficeHasNoDepartments = officeOptions.includes(resolvedOffice) &&
+      (departmentOptionsByOffice[resolvedOffice] || []).length === 0;
+    const department = selectedOfficeHasNoDepartments
+      ? ''
+      : normalizeStructuredDepartment(structuredData.department);
     const previousOffice = normalizeText(resolveOfficeSelection(baseData.college) || baseData.office || baseData.college);
     const nextOffice = normalizeText(resolvedOffice || baseData.office || baseData.college);
     const officeChanged = Boolean(resolvedOffice && previousOffice && nextOffice && nextOffice !== previousOffice);
@@ -517,7 +519,7 @@ const DashboardModule = () => {
       ...(resolvedOffice ? { office: resolvedOffice } : {}),
     };
 
-    if (officeChanged || hasDepartmentField) {
+    if (officeChanged || hasDepartmentField || selectedOfficeHasNoDepartments) {
       next.department = department;
     }
 

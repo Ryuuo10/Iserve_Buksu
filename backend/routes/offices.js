@@ -81,6 +81,13 @@ const resolveOfficeScope = async (user) => {
   }).select('name slug college department');
 
   const isCollegeLevel = officeCategory && !normalizeSpace(officeCategory.department);
+  const childCategories = isCollegeLevel
+    ? await OfficeCategory.find({
+        college: { $regex: `^${escapeRegex(officeCategory.college)}$`, $options: 'i' },
+        department: { $nin: ['', null] },
+        status: 'active',
+      }).select('name slug')
+    : [];
 
   const directValues = [...new Set([
     rawOffice,
@@ -89,7 +96,7 @@ const resolveOfficeScope = async (user) => {
     isCollegeLevel ? officeCategory?.college : '',
   ].filter(Boolean))];
 
-  return { directValues, officeCategory };
+  return { directValues, officeCategory, childCategories };
 };
 
 const buildDepartmentAliases = (department = '') => {
@@ -117,6 +124,7 @@ const buildOfficeScopeConditions = ({
   rawOffice = '',
   directValues = [],
   officeCategory = null,
+  childCategories = [],
   userId = null,
 }) => {
   const conditions = [];
@@ -139,6 +147,11 @@ const buildOfficeScopeConditions = ({
       officeCategory?.slug,
       rawOffice,
     ]);
+    const childOfficeValues = uniqueStrings(childCategories.flatMap((category) => [category?.name, category?.slug]));
+    const collegeOfficeMatches = collegeValues.flatMap((value) => [
+      { office: value },
+      { office: { $regex: `^${escapeRegex(value)}$`, $options: 'i' } },
+    ]);
 
     if (collegeValues.length > 0) {
       conditions.push({
@@ -147,15 +160,21 @@ const buildOfficeScopeConditions = ({
           noDepartmentMatch,
         ],
       });
+      // College-level handlers see complaints filed against the college with a selected department too.
       conditions.push({
         $and: [
-          {
-            $or: collegeValues.map((value) => ({
-              office: { $regex: `^${escapeRegex(value)}$`, $options: 'i' },
-            })),
-          },
-          noDepartmentMatch,
+          { $or: collegeOfficeMatches },
+          { department: { $exists: true, $nin: [null, ''] } },
         ],
+      });
+    }
+
+    if (childOfficeValues.length > 0) {
+      conditions.push({
+        $or: childOfficeValues.flatMap((value) => [
+          { office: value },
+          { office: { $regex: `^${escapeRegex(value)}$`, $options: 'i' } },
+        ]),
       });
     }
 
@@ -230,11 +249,12 @@ const buildOfficeMatch = async (user, { archived = false } = {}) => {
   }
 
   const rawOffice = String(user?.office || '').trim();
-  const { directValues, officeCategory } = await resolveOfficeScope(user);
+  const { directValues, officeCategory, childCategories } = await resolveOfficeScope(user);
   const officeConditions = buildOfficeScopeConditions({
     rawOffice,
     directValues,
     officeCategory,
+    childCategories,
     userId: user._id,
   });
 
